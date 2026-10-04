@@ -133,7 +133,7 @@ Messages form a **tree**. Each message stores `parent_id`, the message before it
 | `agent_tools` | agent_id, tool_id — PK (agent_id, tool_id) |
 | `branch_agents` | branch_id, agent_id, position, is_default — PK (branch_id, agent_id); at most one default per branch |
 | `messages` | id, session_id, branch_id, parent_id?, author_type (`user` \| `assistant` \| `agent` \| `tool`), author_id, agent_label? (MCP token label at post time), agent_id?, run_id?, tool_call_id?, kind (`text` \| `tool_call` \| `tool_result`), model?, content, status (`pending` \| `streaming` \| `done` \| `error`), created_at |
-| `message_mentions` | message_id, agent_id — PK (message_id, agent_id); resolved when the user message is accepted |
+| `message_mentions` | message_id, token_id, created_at — the agent token mentioned as `@label`, resolved when the message is accepted. *Hackathon: agents are MCP tokens; agent_id replaces token_id once first-class agents exist.* |
 | `runs` | id, session_id, branch_id, trigger_message_id, context_head_message_id, agent_id, agent_config_snapshot, initiated_by, parent_run_id?, status (`queued` \| `running` \| `waiting_tool` \| `cancel_requested` \| `succeeded` \| `failed` \| `cancelled`), attempt, lease_owner?, lease_expires_at?, heartbeat_at?, hop_count, token_budget, token_usage, error?, created_at, started_at?, finished_at? |
 | `run_steps` | id, run_id, sequence, kind (`model` \| `tool` \| `handoff`), status, request_metadata, result_metadata?, token_usage?, started_at?, finished_at? |
 | `tool_calls` | id, run_id, step_id, tool_id, tool_name_snapshot, status (`queued` \| `awaiting_approval` \| `running` \| `succeeded` \| `failed` \| `cancelled`), arguments, result?, error?, idempotency_key, created_at, started_at?, finished_at? |

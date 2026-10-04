@@ -15,6 +15,13 @@
       "when": 1791106568251,
       "tag": "0001_ordinary_black_panther",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1791107182547,
+      "tag": "0002_happy_thor",
+      "breakpoints": true
     }
   ]
 }

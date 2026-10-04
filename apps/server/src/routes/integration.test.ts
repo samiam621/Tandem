@@ -28,6 +28,7 @@ function buildTestDb() {
     CREATE TABLE session_members (session_id TEXT NOT NULL, user_id TEXT NOT NULL, joined_at TEXT NOT NULL, last_seen_at TEXT NOT NULL);
     CREATE TABLE branches (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, owner_id TEXT, is_main INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL, model TEXT NOT NULL, fork_message_id TEXT, head_message_id TEXT, created_at TEXT NOT NULL);
     CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, branch_id TEXT NOT NULL, parent_id TEXT, author_type TEXT NOT NULL, author_id TEXT NOT NULL, agent_label TEXT, model TEXT, content TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL);
+    CREATE TABLE message_mentions (message_id TEXT NOT NULL, token_id TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE api_tokens (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, kind TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, label TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT);
   `)
   return drizzle(sqlite, { schema })
@@ -205,6 +206,28 @@ describe('REST integration', () => {
     })).json()
     expect(msgs.find((m: any) => m.content === 'Hello integration test!').agentLabel).toBeNull()
     expect(msgs.find((m: any) => m.content === 'Hi from Claude').agentLabel).toBe('Claude')
+  })
+
+  it('GET /api/sessions/:id/agents → lists agent tokens of members', async () => {
+    const res = await app.inject({
+      method: 'GET', url: `/api/sessions/${sessionId}/agents`,
+      headers: { authorization: `Bearer ${token}` },
+    })
+    expect(res.statusCode).toBe(200)
+    const claude = res.json().find((a: any) => a.label === 'Claude')
+    expect(claude).toMatchObject({ ownerId: userId, active: true })
+  })
+
+  it('@mentioning an agent stores the mention and skips the built-in AI reply', async () => {
+    const res = await app.inject({
+      method: 'POST', url: `/api/branches/${mainBranchId}/messages`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { content: '@claude please review this', triggerAi: true },
+    })
+    expect(res.statusCode).toBe(201)
+    expect(res.json().pendingAssistantId).toBeUndefined()
+    const rows = testDb.select().from(schema.messageMentions).all()
+    expect(rows.map((r) => r.messageId)).toEqual([res.json().userMessage.id])
   })
 
   it('POST /api/auth/exchange with invalid code → 401', async () => {

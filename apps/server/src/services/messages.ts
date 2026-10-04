@@ -1,9 +1,11 @@
 import { nanoid } from 'nanoid'
 import { eq, and, asc } from 'drizzle-orm'
 import { getDb } from '../db/index.js'
-import { messages, branches, sessionMembers } from '../db/schema.js'
+import { messages, branches, sessionMembers, messageMentions } from '../db/schema.js'
 import { bus } from '../events.js'
 import { checkRateLimit } from '../lib/rateLimit.js'
+import { findMentionedLabels } from '../lib/mentions.js'
+import { sessionAgentTokens } from './sessions.js'
 import type { Message } from '@tandem/shared'
 
 function now() { return new Date().toISOString() }
@@ -65,7 +67,7 @@ export async function getBranchMessages(
 // ─── Post a message ───────────────────────────────────────────────────────────
 
 export async function postMessage(
-  actor: { userId: string; tokenKind: 'desktop' | 'agent'; tokenLabel?: string },
+  actor: { userId: string; tokenKind: 'desktop' | 'agent'; tokenId?: string; tokenLabel?: string },
   branchId: string,
   content: string,
   triggerAi: boolean,
@@ -94,6 +96,13 @@ export async function postMessage(
   const ts = now()
   const parentId = branch.headMessageId ?? null
 
+  // @mentions of session agents; an agent never mentions itself.
+  const agentTokens = sessionAgentTokens(branch.sessionId).map((r) => r.token).filter((t) => t.id !== actor.tokenId)
+  const mentionedLabels = new Set(findMentionedLabels(content, [...new Set(agentTokens.map((t) => t.label))]))
+  const mentionedTokenIds = agentTokens.filter((t) => mentionedLabels.has(t.label)).map((t) => t.id)
+  // A message meant for an agent gets no built-in AI reply.
+  if (mentionedTokenIds.length) triggerAi = false
+
   let pendingId: string | undefined
 
   db.transaction((tx) => {
@@ -112,6 +121,10 @@ export async function postMessage(
     }).run()
 
     tx.update(branches).set({ headMessageId: msgId }).where(eq(branches.id, branchId)).run()
+
+    for (const tokenId of mentionedTokenIds) {
+      tx.insert(messageMentions).values({ messageId: msgId, tokenId, createdAt: ts }).run()
+    }
 
     if (triggerAi) {
       pendingId = nanoid()

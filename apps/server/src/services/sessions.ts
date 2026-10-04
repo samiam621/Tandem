@@ -1,9 +1,9 @@
 import { nanoid } from 'nanoid'
 import { eq, and, inArray } from 'drizzle-orm'
 import { getDb } from '../db/index.js'
-import { sessions, sessionMembers, branches, users } from '../db/schema.js'
+import { sessions, sessionMembers, branches, users, apiTokens } from '../db/schema.js'
 import { bus } from '../events.js'
-import type { Session, Branch, User } from '@tandem/shared'
+import type { Session, Branch, User, SessionAgent } from '@tandem/shared'
 
 function now() { return new Date().toISOString() }
 
@@ -182,4 +182,38 @@ export async function getSessionBranches(
 
   const rows = db.select().from(branches).where(eq(branches.sessionId, sessionId)).all()
   return rows.map(rowToBranch)
+}
+
+// ─── Session agents ───────────────────────────────────────────────────────────
+// Agent tokens owned by session members. Their labels are the names teammates @mention.
+
+const ACTIVE_MS = 5 * 60 * 1000
+
+export function sessionAgentTokens(sessionId: string) {
+  return getDb()
+    .select({ token: apiTokens, ownerName: users.displayName })
+    .from(apiTokens)
+    .innerJoin(sessionMembers, and(eq(sessionMembers.userId, apiTokens.userId), eq(sessionMembers.sessionId, sessionId)))
+    .innerJoin(users, eq(users.id, apiTokens.userId))
+    .where(eq(apiTokens.kind, 'agent'))
+    .all()
+}
+
+export async function listSessionAgents(
+  actor: { userId: string },
+  sessionId: string,
+): Promise<SessionAgent[] | null> {
+  const db = getDb()
+  const membership = db.select().from(sessionMembers)
+    .where(and(eq(sessionMembers.sessionId, sessionId), eq(sessionMembers.userId, actor.userId)))
+    .get()
+  if (!membership) return null
+
+  return sessionAgentTokens(sessionId).map(({ token, ownerName }) => ({
+    tokenId: token.id,
+    label: token.label,
+    ownerId: token.userId,
+    ownerName,
+    active: token.lastUsedAt !== null && Date.now() - Date.parse(token.lastUsedAt) < ACTIVE_MS,
+  }))
 }

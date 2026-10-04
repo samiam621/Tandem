@@ -57,6 +57,13 @@ export const messages = sqliteTable('messages', {
   createdAt: text('created_at').notNull(),
 })
 
+// Agent tokens mentioned as @label in a message (agents are MCP tokens for now).
+export const messageMentions = sqliteTable('message_mentions', {
+  messageId: text('message_id').notNull(),
+  tokenId: text('token_id').notNull(),
+  createdAt: text('created_at').notNull(),
+})
+
 export const apiTokens = sqliteTable('api_tokens', {
   id: text('id').primaryKey(),
   userId: text('user_id').notNull(),
