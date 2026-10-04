@@ -1,9 +1,16 @@
 appId: com.tandem.app
 productName: Tandem
-copyright: Copyright © 2024
+copyright: Copyright © 2026
 
 directories:
   output: dist-electron
+
+# Fixed file names so README download links (releases/latest/download/...) keep working.
+artifactName: Tandem-${os}-${arch}.${ext}
+afterPack: scripts/adhoc-sign.cjs
+# Installed app is named "Tandem" (own data folder), separate from `npm run dev` (@tandem/desktop).
+extraMetadata:
+  productName: Tandem
 
 files:
   - out/**/*

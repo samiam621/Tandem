@@ -2,4 +2,6 @@ node_modules
 .env
 tandem.db*
 dist
+dist-electron
 *.tsbuildinfo
+apps/desktop/out

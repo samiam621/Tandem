@@ -1,0 +1,43 @@
+name: Release desktop app
+
+# Push a tag like v0.1.0 to build the installers and attach them to a GitHub Release.
+# README download buttons link to releases/latest/download/<file>, so file names must stay fixed
+# (artifactName in apps/desktop/electron-builder.yml).
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: --mac
+            files: apps/desktop/dist-electron/Tandem-*.dmg
+          - os: windows-latest
+            target: --win
+            files: apps/desktop/dist-electron/Tandem-*.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build -w packages/shared
+      - name: Build installer
+        working-directory: apps/desktop
+        run: npx electron-vite build && npx electron-builder ${{ matrix.target }} --publish never
+      - name: Attach to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "Tandem $GITHUB_REF_NAME" --generate-notes || true
+          gh release upload "$GITHUB_REF_NAME" ${{ matrix.files }} --clobber

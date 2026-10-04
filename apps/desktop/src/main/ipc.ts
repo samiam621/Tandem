@@ -1,4 +1,4 @@
-import { ipcMain, safeStorage, Notification, clipboard } from 'electron'
+import { app, ipcMain, safeStorage, Notification, clipboard } from 'electron'
 import Store from 'electron-store'
 
 interface StoreSchema {
@@ -8,7 +8,8 @@ interface StoreSchema {
 
 const store = new Store<StoreSchema>()
 
-const DEFAULT_SERVER_URL = 'http://localhost:3000'
+// Installed builds use the hosted server; `npm run dev` uses the local one. Changeable in Settings.
+const DEFAULT_SERVER_URL = app.isPackaged ? 'https://tandem-server-hdmw.onrender.com' : 'http://localhost:3000'
 
 export function registerIpcHandlers() {
   // ─── Token storage (safeStorage → OS keychain) ─────────────────────────────
