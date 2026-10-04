@@ -163,7 +163,7 @@ path.reverse()
 context = path.filter(status == 'done')   // skip pending/error assistant messages
 ```
 
-The context builder is a pure function over the branch path, run snapshot, and linked tool events. User messages become `user` (prefixed with the author's display name); agent/assistant messages use the corresponding assistant role and agent identity; completed tool calls/results become the provider's structured tool messages. Pending, failed, or cancelled work is not silently presented as a successful tool result. The key acceptance check remains that a branch sees its fork history and its own events, never sibling-branch messages.
+The context builder is a pure function over the branch path, run snapshot, and linked tool events. A short system prompt opens the context and explains the multiplayer format. User messages become `user` (prefixed with the author's display name, or an agent's token label); agent/assistant messages use the corresponding assistant role and agent identity; completed tool calls/results become the provider's structured tool messages. Pending, failed, or cancelled work is not silently presented as a successful tool result. The key acceptance check remains that a branch sees its fork history and its own events, never sibling-branch messages.
 
 ### Routing and message ordering
 

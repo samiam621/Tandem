@@ -70,7 +70,7 @@ export async function createSession(
       id: branchId,
       sessionId,
       ownerId: null,
-      isMain: 1 as unknown as boolean,
+      isMain: true,
       name: 'main',
       model: defaultModel,
       forkMessageId: null,

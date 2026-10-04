@@ -1,46 +1,23 @@
-import { eq, asc } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 import OpenAI from 'openai'
 import { getDb } from '../db/index.js'
-import { messages, branches } from '../db/schema.js'
+import { messages, branches, users } from '../db/schema.js'
 import { bus } from '../events.js'
 import { assertModelAllowed } from './models.js'
+import { buildChatContext } from './context.js'
 
 // ─── Context builder ──────────────────────────────────────────────────────────
-// Builds the message path from root to the pending assistant message,
-// then maps it to OpenRouter/OpenAI chat format.
+// Loads the session's messages and speaker names; the pure mapping lives in context.ts.
 
-function buildContext(sessionId: string, headMessageId: string) {
+function buildContext(sessionId: string, pendingMsgId: string) {
   const db = getDb()
-  const allMessages = db.select().from(messages)
-    .where(eq(messages.sessionId, sessionId))
-    .orderBy(asc(messages.createdAt))
-    .all()
-
-  const msgById = new Map(allMessages.map((m) => [m.id, m]))
-
-  // Walk from headMessageId (the pending assistant msg) up to root via parent_id
-  const path: typeof allMessages[0][] = []
-  let cur: typeof allMessages[0] | undefined = msgById.get(headMessageId)
-  while (cur) {
-    path.push(cur)
-    cur = cur.parentId ? msgById.get(cur.parentId) : undefined
-  }
-  path.reverse()
-
-  // Filter out the pending assistant message itself and any error/pending ones
-  const context = path.filter(
-    (m) => !(m.id === headMessageId) && m.status === 'done',
+  const rows = db.select().from(messages).where(eq(messages.sessionId, sessionId)).all()
+  const authorIds = [...new Set(rows.map((m) => m.authorId))]
+  const nameById = new Map(
+    db.select({ id: users.id, name: users.displayName }).from(users).where(inArray(users.id, authorIds)).all()
+      .map((u) => [u.id, u.name]),
   )
-
-  // Map to OpenRouter roles
-  type ChatMsg = { role: 'user' | 'assistant'; content: string }
-  return context.map((m): ChatMsg => {
-    if (m.authorType === 'assistant') {
-      return { role: 'assistant', content: m.content }
-    }
-    // user and agent messages → role: user, prefixed with display name if available
-    return { role: 'user', content: m.content }
-  })
+  return buildChatContext(rows, pendingMsgId, nameById)
 }
 
 // ─── Summarize (Share to main) ────────────────────────────────────────────────
