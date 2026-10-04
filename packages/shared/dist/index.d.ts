@@ -250,6 +250,7 @@ export interface McpMention {
 export interface McpContextMessage extends McpMessageRow {
     branchId: string;
     agentLabel: string | null;
+    sharedFromBranchId: string | null;
 }
 export interface McpBranchContext {
     session: {
