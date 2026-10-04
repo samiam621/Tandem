@@ -29,7 +29,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      # Desktop + shared only: the server's native better-sqlite3 is not needed and fails to compile on Windows runners.
+      - run: npm ci --workspace apps/desktop --workspace packages/shared
       - run: npm run build -w packages/shared
       - name: Build installer
         working-directory: apps/desktop

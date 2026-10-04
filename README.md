@@ -129,7 +129,7 @@ node apps/server/scripts/e2e.mjs https://tandem-server-hdmw.onrender.com
 Push a version tag. GitHub Actions ([release.yml](.github/workflows/release.yml)) builds the macOS (Apple Silicon and Intel) and Windows installers and attaches them to a GitHub Release. The download buttons above always point at the latest release.
 
 ```bash
-git tag v0.1.1 && git push origin v0.1.1
+git tag v0.1.2 && git push origin v0.1.2   # next unused version
 ```
 
 Follow the build under the repo's **Actions** tab. macOS builds are ad-hoc signed, Windows builds are unsigned.
