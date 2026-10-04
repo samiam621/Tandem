@@ -47,6 +47,17 @@ export interface Message {
   content: string
   status: MessageStatus
   createdAt: string
+  agentLabel?: string | null // agent token label, e.g. "Claude", when posted through MCP
+  sharedFromBranchId?: string | null // set on a Share to main summary posted in main
+}
+
+// An agent token owned by a session member; its label is the name teammates @mention.
+export interface SessionAgent {
+  tokenId: string
+  label: string
+  ownerId: string
+  ownerName: string
+  active: boolean // token used in the last few minutes
 }
 
 export interface ApiToken {
@@ -161,7 +172,7 @@ export interface WsBranchUpdatedEvent {
 }
 export interface WsTypingEvent {
   type: 'typing'
-  payload: { userId: string; branchId: string }
+  payload: { userId: string; branchId: string; agentLabel?: string } // agentLabel set by MCP set_working
 }
 
 export type WsServerEvent =
@@ -196,6 +207,29 @@ export interface McpMessageRow {
   content: string
   status: MessageStatus
   createdAt: string
+}
+
+export interface McpMention {
+  messageId: string
+  sessionId: string
+  branchId: string
+  branchName: string
+  authorDisplayName: string
+  content: string
+  createdAt: string
+}
+
+export interface McpContextMessage extends McpMessageRow {
+  branchId: string
+  agentLabel: string | null
+}
+
+export interface McpBranchContext {
+  session: { id: string; title: string }
+  branch: Branch & { ownerDisplayName: string | null }
+  forkedFrom: { branchId: string; branchName: string; messageId: string } | null
+  messages: McpContextMessage[] // root → head, including history inherited from the fork
+  otherBranches: { id: string; name: string; ownerDisplayName: string | null }[]
 }
 
 // ─── Error shape ──────────────────────────────────────────────────────────────

@@ -40,6 +40,15 @@ export interface Message {
     content: string;
     status: MessageStatus;
     createdAt: string;
+    agentLabel?: string | null;
+    sharedFromBranchId?: string | null;
+}
+export interface SessionAgent {
+    tokenId: string;
+    label: string;
+    ownerId: string;
+    ownerName: string;
+    active: boolean;
 }
 export interface ApiToken {
     id: string;
@@ -202,6 +211,7 @@ export interface WsTypingEvent {
     payload: {
         userId: string;
         branchId: string;
+        agentLabel?: string;
     };
 }
 export type WsServerEvent = WsPresenceUpdateEvent | WsMessageCreatedEvent | WsAssistantDeltaEvent | WsAssistantDoneEvent | WsAssistantErrorEvent | WsBranchCreatedEvent | WsBranchUpdatedEvent | WsTypingEvent;
@@ -227,6 +237,39 @@ export interface McpMessageRow {
     content: string;
     status: MessageStatus;
     createdAt: string;
+}
+export interface McpMention {
+    messageId: string;
+    sessionId: string;
+    branchId: string;
+    branchName: string;
+    authorDisplayName: string;
+    content: string;
+    createdAt: string;
+}
+export interface McpContextMessage extends McpMessageRow {
+    branchId: string;
+    agentLabel: string | null;
+}
+export interface McpBranchContext {
+    session: {
+        id: string;
+        title: string;
+    };
+    branch: Branch & {
+        ownerDisplayName: string | null;
+    };
+    forkedFrom: {
+        branchId: string;
+        branchName: string;
+        messageId: string;
+    } | null;
+    messages: McpContextMessage[];
+    otherBranches: {
+        id: string;
+        name: string;
+        ownerDisplayName: string | null;
+    }[];
 }
 export interface ApiError {
     error: {
