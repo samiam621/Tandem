@@ -77,7 +77,13 @@ The desktop app's server URL defaults to the hosted server. You can change it in
 npm test
 ```
 
-Unit tests cover context building from the message tree, permission checks, presence counting, and the one-time code exchange. Integration tests cover the main REST endpoints.
+Unit tests cover context building from the message tree, permission checks, presence counting, the one-time code exchange, and @mention matching. Integration tests cover the main REST endpoints and the agent services behind the MCP tools: mentions (including that outsiders never see them), branch context, the working indicator, and Share to main.
+
+To check a running server end to end (REST, live WebSocket events, the MCP tools Claude uses, and Share to main), run the script below against it. It creates two guests and a session there. Needs Node 22+.
+
+```bash
+node apps/server/scripts/e2e.mjs https://tandem-server-hdmw.onrender.com
+```
 
 ### Deploy the server
 

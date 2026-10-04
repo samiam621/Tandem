@@ -335,6 +335,54 @@ describe('REST integration', () => {
     bus.offSession(onEvent)
   }, 10000)
 
+  it('outsiders get nothing: no context, no working indicator, no share, no mentions', async () => {
+    // Mallory is signed in but never joined the session, and labels her agent token "Claude" too.
+    const mallory = (await app.inject({
+      method: 'POST', url: '/api/auth/guest', payload: { displayName: 'Mallory', deviceId: 'device-mallory' },
+    })).json().token
+    const malloryAgentToken = (await app.inject({
+      method: 'POST', url: '/api/tokens', headers: { authorization: `Bearer ${mallory}` }, payload: { label: 'Claude' },
+    })).json().rawToken
+    const malloryAgent = (await resolveToken(malloryAgentToken))!
+
+    // An @Claude post in the session must not create a mention for her same-named token.
+    await app.inject({
+      method: 'POST', url: `/api/branches/${mainBranchId}/messages`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { content: '@Claude one more thing', triggerAi: false },
+    })
+    const mentionRows = () => testDb.select().from(schema.messageMentions).all().filter((r) => r.tokenId === malloryAgent.tokenId)
+    expect(mentionRows()).toEqual([])
+
+    // Even a stray mention row for her token in this session is not returned to her.
+    const someMsg = testDb.select().from(schema.messages).all().find((m) => m.sessionId === sessionId)!
+    testDb.insert(schema.messageMentions).values({ messageId: someMsg.id, tokenId: malloryAgent.tokenId, createdAt: '9999' }).run()
+    expect(listMentions(malloryAgent, '')).toEqual([])
+    expect(await waitForMentions(malloryAgent, '', 20)).toEqual([])
+
+    expect(await getBranchContext(malloryAgent, mainBranchId, 200)).toBeNull()
+    expect(setWorking(malloryAgent, mainBranchId, true)).toBe(false)
+    const share = await app.inject({
+      method: 'POST', url: `/api/branches/${bugfixBranchId}/share`, headers: { authorization: `Bearer ${mallory}` },
+    })
+    expect(share.statusCode).toBe(404)
+    const agents = await app.inject({
+      method: 'GET', url: `/api/sessions/${sessionId}/agents`, headers: { authorization: `Bearer ${mallory}` },
+    })
+    expect(agents.statusCode).toBe(404)
+  })
+
+  it('an agent mentioning its own label does not mention itself', async () => {
+    const claude = (await resolveToken(claudeToken))!
+    const before = listMentions(claude, '').length
+    await app.inject({
+      method: 'POST', url: `/api/branches/${mainBranchId}/messages`,
+      headers: { authorization: `Bearer ${claudeToken}` },
+      payload: { content: 'note to self @Claude', triggerAi: false },
+    })
+    expect(listMentions(claude, '').length).toBe(before)
+  })
+
   it('POST /api/auth/exchange with invalid code → 401', async () => {
     const res = await app.inject({
       method: 'POST', url: '/api/auth/exchange',
