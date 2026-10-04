@@ -7,6 +7,7 @@ import { branches, sessionMembers } from '../db/schema.js'
 import { bus } from '../events.js'
 import { shareBranch } from '../services/messages.js'
 import type { Branch } from '@tandem/shared'
+import { isFreeModelId } from '../ai/models.js'
 
 function rowToBranch(row: typeof branches.$inferSelect): Branch {
   return {
@@ -29,6 +30,9 @@ export const branchRoutes: FastifyPluginAsync = async (app) => {
     const body = UpdateBranchSchema.safeParse(req.body)
     if (!body.success) {
       return reply.code(400).send({ error: { code: 'invalid_request', message: body.error.message } })
+    }
+    if (body.data.model && !isFreeModelId(body.data.model)) {
+      return reply.code(400).send({ error: { code: 'free_model_required', message: 'Select an OpenRouter model with the :free suffix.' } })
     }
 
     const db = getDb()

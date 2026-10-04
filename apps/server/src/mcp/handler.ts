@@ -11,6 +11,7 @@ import { waitForMentions, getBranchContext, setWorking } from '../services/agent
 import { eq } from 'drizzle-orm'
 import { getDb } from '../db/index.js'
 import { messages, users } from '../db/schema.js'
+import { fetchFreeModels, isFreeModelId } from '../ai/models.js'
 
 // Build a new McpServer per request with the actor closed over.
 // This is stateless mode — no session persistence across requests.
@@ -158,6 +159,9 @@ function buildMcpServer(actor: Actor) {
       name: z.string().optional().describe('Optional branch name'),
     },
     async ({ fromMessageId, model, name }) => {
+      if (!isFreeModelId(model)) {
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'free_model_required', message: 'Select an OpenRouter model with the :free suffix.' }) }] }
+      }
       const db = getDb()
       const msg = db.select().from(messages).where(eq(messages.id, fromMessageId)).get()
       if (!msg) return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'message_not_found' }) }] }
@@ -170,30 +174,13 @@ function buildMcpServer(actor: Actor) {
   // ─── list_models ──────────────────────────────────────────────────────────
   server.tool(
     'list_models',
-    'List available AI models that can be used when creating branches or sessions.',
+    'List free AI models that can be used when creating branches or sessions.',
     {},
     async () => {
-      const key = process.env.OPENROUTER_API_KEY
-      if (!key) {
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify([
-              { id: 'openai/gpt-4o', name: 'GPT-4o' },
-              { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini' },
-              { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet' },
-            ]),
-          }],
-        }
-      }
-      const res = await fetch('https://openrouter.ai/api/v1/models', {
-        headers: { Authorization: `Bearer ${key}` },
-      })
-      const data = (await res.json()) as { data: { id: string; name: string }[] }
       return {
         content: [{
           type: 'text' as const,
-          text: JSON.stringify(data.data.map((m) => ({ id: m.id, name: m.name }))),
+          text: JSON.stringify(await fetchFreeModels()),
         }],
       }
     },
