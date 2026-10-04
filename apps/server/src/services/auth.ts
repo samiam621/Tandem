@@ -138,6 +138,7 @@ export interface Actor {
   userId: string
   tokenKind: 'desktop' | 'agent'
   tokenId: string
+  tokenLabel: string
 }
 
 export async function resolveToken(rawToken: string): Promise<Actor | null> {
@@ -152,7 +153,7 @@ export async function resolveToken(rawToken: string): Promise<Actor | null> {
     .where(eq(apiTokens.id, row.id))
     .run()
 
-  return { userId: row.userId, tokenKind: row.kind, tokenId: row.id }
+  return { userId: row.userId, tokenKind: row.kind, tokenId: row.id, tokenLabel: row.label }
 }
 
 // ─── Logout ───────────────────────────────────────────────────────────────────

@@ -27,7 +27,7 @@ function buildTestDb() {
     CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, owner_id TEXT NOT NULL, default_model TEXT NOT NULL, invite_code TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
     CREATE TABLE session_members (session_id TEXT NOT NULL, user_id TEXT NOT NULL, joined_at TEXT NOT NULL, last_seen_at TEXT NOT NULL);
     CREATE TABLE branches (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, owner_id TEXT, is_main INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL, model TEXT NOT NULL, fork_message_id TEXT, head_message_id TEXT, created_at TEXT NOT NULL);
-    CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, branch_id TEXT NOT NULL, parent_id TEXT, author_type TEXT NOT NULL, author_id TEXT NOT NULL, model TEXT, content TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL);
+    CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, branch_id TEXT NOT NULL, parent_id TEXT, author_type TEXT NOT NULL, author_id TEXT NOT NULL, agent_label TEXT, model TEXT, content TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL);
     CREATE TABLE api_tokens (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, kind TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, label TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT);
   `)
   return drizzle(sqlite, { schema })
@@ -182,6 +182,29 @@ describe('REST integration', () => {
     const body = res.json()
     expect(body.rawToken).toMatch(/^tdm_/)
     expect(body.token.kind).toBe('agent')
+  })
+
+  it('agent token posts carry the token label; desktop posts do not', async () => {
+    const created = await app.inject({
+      method: 'POST', url: '/api/tokens',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { label: 'Claude' },
+    })
+    const res = await app.inject({
+      method: 'POST', url: `/api/branches/${mainBranchId}/messages`,
+      headers: { authorization: `Bearer ${created.json().rawToken}` },
+      payload: { content: 'Hi from Claude', triggerAi: false },
+    })
+    expect(res.statusCode).toBe(201)
+    expect(res.json().userMessage.authorType).toBe('agent')
+    expect(res.json().userMessage.agentLabel).toBe('Claude')
+
+    const msgs = (await app.inject({
+      method: 'GET', url: `/api/branches/${mainBranchId}/messages`,
+      headers: { authorization: `Bearer ${token}` },
+    })).json()
+    expect(msgs.find((m: any) => m.content === 'Hello integration test!').agentLabel).toBeNull()
+    expect(msgs.find((m: any) => m.content === 'Hi from Claude').agentLabel).toBe('Claude')
   })
 
   it('POST /api/auth/exchange with invalid code → 401', async () => {

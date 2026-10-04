@@ -16,6 +16,7 @@ function rowToMessage(row: typeof messages.$inferSelect): Message {
     parentId: row.parentId ?? null,
     authorType: row.authorType,
     authorId: row.authorId,
+    agentLabel: row.agentLabel ?? null,
     model: row.model ?? null,
     content: row.content,
     status: row.status,
@@ -64,7 +65,7 @@ export async function getBranchMessages(
 // ─── Post a message ───────────────────────────────────────────────────────────
 
 export async function postMessage(
-  actor: { userId: string; tokenKind: 'desktop' | 'agent' },
+  actor: { userId: string; tokenKind: 'desktop' | 'agent'; tokenLabel?: string },
   branchId: string,
   content: string,
   triggerAi: boolean,
@@ -103,6 +104,7 @@ export async function postMessage(
       parentId,
       authorType,
       authorId: actor.userId,
+      agentLabel: authorType === 'agent' ? actor.tokenLabel ?? null : null,
       model: null,
       content,
       status: 'done',

@@ -8,6 +8,13 @@
       "when": 1791080287824,
       "tag": "0000_pretty_veda",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1791106568251,
+      "tag": "0001_ordinary_black_panther",
+      "breakpoints": true
     }
   ]
 }

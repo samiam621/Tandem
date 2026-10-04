@@ -50,6 +50,7 @@ export const messages = sqliteTable('messages', {
   parentId: text('parent_id'),
   authorType: text('author_type', { enum: ['user', 'assistant', 'agent'] }).notNull(),
   authorId: text('author_id').notNull(),
+  agentLabel: text('agent_label'), // agent token label at post time, e.g. "Claude"
   model: text('model'),
   content: text('content').notNull().default(''),
   status: text('status', { enum: ['pending', 'streaming', 'done', 'error'] }).notNull().default('pending'),
