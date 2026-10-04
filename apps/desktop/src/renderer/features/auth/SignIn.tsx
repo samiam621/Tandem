@@ -98,7 +98,7 @@ export function SignIn() {
             disabled={loading || !displayName.trim()}
             className="w-full rounded-lg bg-gray-700 py-2 text-sm font-medium hover:bg-gray-600 disabled:opacity-50"
           >
-            Continue as guest
+            {loading ? 'Signing in…' : 'Continue as guest'}
           </button>
         </form>
 

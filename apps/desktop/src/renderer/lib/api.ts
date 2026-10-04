@@ -41,6 +41,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  health: () => request<{ ok: boolean }>('/api/health'),
+
   auth: {
     guest: (displayName: string, deviceId: string) =>
       request<{ user: import('@tandem/shared').User; token: string }>('/api/auth/guest', {
