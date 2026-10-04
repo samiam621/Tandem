@@ -22,6 +22,9 @@ export interface Session {
   defaultModel: string
   inviteCode: string
   createdAt: string
+  brief: string // shared project brief: every branch's AI reads the latest version
+  briefUpdatedAt: string | null
+  briefUpdatedBy: string | null
 }
 
 export interface Branch {
@@ -105,6 +108,14 @@ export const PostMessageSchema = z.object({
   triggerAi: z.boolean().default(true),
 })
 
+export const BRIEF_MAX_CHARS = 20000
+
+// baseUpdatedAt is the briefUpdatedAt the edit started from; a mismatch means someone saved in between.
+export const UpdateBriefSchema = z.object({
+  content: z.string().max(BRIEF_MAX_CHARS),
+  baseUpdatedAt: z.string().nullable(),
+})
+
 export const CreateTokenSchema = z.object({
   label: z.string().min(1).max(64),
 })
@@ -175,6 +186,11 @@ export interface WsTypingEvent {
   payload: { userId: string; branchId: string; agentLabel?: string } // agentLabel set by MCP set_working
 }
 
+export interface WsBriefUpdatedEvent {
+  type: 'brief_updated'
+  payload: { sessionId: string; brief: string; briefUpdatedAt: string; briefUpdatedBy: string }
+}
+
 export type WsServerEvent =
   | WsPresenceUpdateEvent
   | WsMessageCreatedEvent
@@ -184,6 +200,7 @@ export type WsServerEvent =
   | WsBranchCreatedEvent
   | WsBranchUpdatedEvent
   | WsTypingEvent
+  | WsBriefUpdatedEvent
 
 // ─── MCP tool I/O ─────────────────────────────────────────────────────────────
 
@@ -227,6 +244,8 @@ export interface McpContextMessage extends McpMessageRow {
 
 export interface McpBranchContext {
   session: { id: string; title: string }
+  brief: string // the session's shared project brief, always the latest version
+  briefUpdatedAt: string | null
   branch: Branch & { ownerDisplayName: string | null }
   forkedFrom: { branchId: string; branchName: string; messageId: string } | null
   messages: McpContextMessage[] // root → head, including history inherited from the fork

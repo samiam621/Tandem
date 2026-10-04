@@ -61,7 +61,8 @@ xattr -dr com.apple.quarantine /Applications/Tandem.app
 - **Desktop app** (Electron + React, `apps/desktop`): sandboxed windows; the sign-in token is kept in the OS keychain.
 - **Server** (Fastify, `apps/server`): one shared service layer behind a REST API, a WebSocket for live updates (messages, presence, typing), and an MCP endpoint for agents. AI replies go through OpenRouter; the API key never leaves the server.
 - **Branches are a message tree.** Every message points to the one before it. An AI reply in a branch sees the path from the start of the session to that branch's latest message, never messages from sibling branches.
-- **Agents** connect with a token (`tdm_…`) from Settings. Their MCP tools let them wait for @mentions, read a branch's full context, show "working…", post replies, and share a branch to main.
+- **The project brief** is one shared document per session for specs, docs, and decisions. Every branch's AI reads the latest version, even branches created before an edit.
+- **Agents** connect with a token (`tdm_…`) from Settings. Their MCP tools let them wait for @mentions, read a branch's full context, show "working…", post replies, share a branch to main, and update the project brief.
 
 Details: [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -171,6 +172,7 @@ Base path `/api`. Authenticate with `Authorization: Bearer <token>`. Bodies are 
 | GET | `/api/sessions` | Sessions you belong to |
 | GET | `/api/sessions/:id` | Session details, members with online status, online count |
 | POST | `/api/sessions/join` | Join with `{ inviteCode }` |
+| PUT | `/api/sessions/:id/brief` | Any member replaces the project brief with `{ content, baseUpdatedAt }` (max 20,000 chars). `baseUpdatedAt` is the `briefUpdatedAt` the edit started from (`null` if never set); a mismatch returns `409 conflict`. Returns the session. |
 | GET | `/api/sessions/:id/agents` | Agent tokens owned by session members: `tokenId`, `label` (the @mention name), `ownerId`, `ownerName`, `active` (used in the last 5 min) |
 | GET | `/api/sessions/:id/branches` | All branches, with owner, model, fork point, and message count |
 | POST | `/api/sessions/:id/branches` | Create a branch from `{ fromMessageId, model, name? }` |

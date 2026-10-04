@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { messages } from '../db/schema.js'
-import { buildChatContext, MULTIPLAYER_PROMPT } from './context.js'
+import { buildChatContext, BRIEF_HEADER, MULTIPLAYER_PROMPT } from './context.js'
 
 type Row = typeof messages.$inferSelect
 
@@ -21,6 +21,14 @@ describe('AI context builder', () => {
   it('starts with the multiplayer system prompt', () => {
     const rows = [msg('m1', null, { content: 'Hi' }), msg('m2', 'm1', { authorType: 'assistant', status: 'pending' })]
     expect(buildChatContext(rows, 'm2', names)[0]).toEqual({ role: 'system', content: MULTIPLAYER_PROMPT })
+  })
+
+  it('adds the brief as a second system message, and nothing when it is empty', () => {
+    const rows = [msg('m1', null, { content: 'Hi' }), msg('m2', 'm1', { authorType: 'assistant', status: 'pending' })]
+    const withBrief = buildChatContext(rows, 'm2', names, 'Use Postgres.')
+    expect(withBrief[1]).toEqual({ role: 'system', content: `${BRIEF_HEADER}\n\nUse Postgres.` })
+    expect(withBrief[2]).toEqual({ role: 'user', content: 'Alice: Hi' })
+    expect(buildChatContext(rows, 'm2', names, '  \n').filter((c) => c.role === 'system')).toHaveLength(1)
   })
 
   it('builds context from root to head, excluding the pending assistant message', () => {

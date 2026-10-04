@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify'
-import { CreateSessionSchema, JoinSessionSchema, CreateBranchSchema } from '@tandem/shared'
+import { CreateSessionSchema, JoinSessionSchema, CreateBranchSchema, UpdateBriefSchema } from '@tandem/shared'
 import { requireAuth } from '../middleware/auth.js'
 import {
   createSession,
@@ -8,6 +8,7 @@ import {
   joinSession,
   getSessionBranches,
   listSessionAgents,
+  updateBrief,
 } from '../services/sessions.js'
 import { createBranch, getSessionTree } from '../services/branches.js'
 
@@ -45,6 +46,21 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
     const result = await joinSession(req.actor!, body.data.inviteCode)
     if (!result) return reply.code(404).send({ error: { code: 'not_found', message: 'Invalid invite code' } })
     return reply.send(result)
+  })
+
+  // PUT /api/sessions/:id/brief
+  app.put('/api/sessions/:id/brief', { preHandler: requireAuth }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const body = UpdateBriefSchema.safeParse(req.body)
+    if (!body.success) {
+      return reply.code(400).send({ error: { code: 'invalid_request', message: body.error.message } })
+    }
+    try {
+      return reply.send(updateBrief(req.actor!, id, body.data.content, body.data.baseUpdatedAt))
+    } catch (err: any) {
+      const status = err.status ?? 500
+      return reply.code(status).send({ error: { code: err.code ?? 'server_error', message: err.message } })
+    }
   })
 
   // GET /api/sessions/:id/branches

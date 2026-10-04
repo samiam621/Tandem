@@ -19,7 +19,7 @@ These describe the shipped MVP and should remain compatible as agent chat is add
 | Models | The MVP's automatic reply uses the branch's model through OpenRouter's OpenAI-compatible API, with streaming. |
 | API key | One `OPENROUTER_API_KEY`, held only on the server. Users do not bring their own keys. |
 | MCP identity | MCP clients act as their token's user. Their messages carry that user's `author_id` and `author_type = agent`; this is distinct from a configured, first-class Tandem agent. |
-| Context | Model context is built from the current branch's root-to-head path; sibling-branch messages are excluded. |
+| Context | Model context is built from the session's project brief (always the latest version) plus the current branch's root-to-head path; sibling-branch messages are excluded. |
 
 ## Agent chat target
 
@@ -126,7 +126,7 @@ Messages form a **tree**. Each message stores `parent_id`, the message before it
 | Table | Fields |
 |---|---|
 | `users` | id, kind (`github` \| `guest` \| `agent`), display_name, github_id?, device_id?, avatar_url, created_at |
-| `sessions` | id, title, owner_id, default_model, invite_code (unique), created_at |
+| `sessions` | id, title, owner_id, default_model, invite_code (unique), created_at, brief (markdown, default ''), brief_updated_at?, brief_updated_by? |
 | `session_members` | session_id, user_id, joined_at, last_seen_at — PK (session_id, user_id) |
 | `branches` | id, session_id, owner_id (null for main), is_main, name, model, fork_message_id (null for main), head_message_id, created_at |
 | `agents` | id, session_id, owner_id, name, model, system_prompt, created_at, updated_at, archived_at? |
@@ -163,7 +163,7 @@ path.reverse()
 context = path.filter(status == 'done')   // skip pending/error assistant messages
 ```
 
-The context builder is a pure function over the branch path, run snapshot, and linked tool events. A short system prompt opens the context and explains the multiplayer format. User messages become `user` (prefixed with the author's display name, or an agent's token label); agent/assistant messages use the corresponding assistant role and agent identity; completed tool calls/results become the provider's structured tool messages. Pending, failed, or cancelled work is not silently presented as a successful tool result. The key acceptance check remains that a branch sees its fork history and its own events, never sibling-branch messages.
+The context builder is a pure function over the branch path, run snapshot, and linked tool events. A short system prompt opens the context and explains the multiplayer format. If the session has a **project brief**, it follows as a second system message. The brief is read live at reply time, not from the path, so a branch forked before a brief edit still sees the latest version. User messages become `user` (prefixed with the author's display name, or an agent's token label); agent/assistant messages use the corresponding assistant role and agent identity; completed tool calls/results become the provider's structured tool messages. Pending, failed, or cancelled work is not silently presented as a successful tool result. The key acceptance check remains that a branch sees its fork history and its own events, never sibling-branch messages.
 
 ### Routing and message ordering
 
@@ -232,6 +232,7 @@ Each app window opens one socket. The first frame must be `{ "type": "auth", "pa
 | S→C | `branch_created` | full branch |
 | S→C | `branch_updated` | full branch |
 | S→C | `typing` | userId, branchId |
+| S→C | `brief_updated` | sessionId, brief, briefUpdatedAt, briefUpdatedBy |
 
 ### Presence
 
@@ -266,8 +267,9 @@ The MCP server uses `@modelcontextprotocol/sdk` with the Streamable HTTP transpo
 | `create_branch` | fromMessageId, model, name? | new branch |
 | `list_models` | — | model IDs and names (only `:free` models unless `OPENROUTER_ALLOW_PAID=true`) |
 | `wait_for_mentions` | since?, timeoutSeconds = 25 (max 50) | `{ mentions, cursor }`: @mentions of this agent token after `since` in the user's sessions; waits until one arrives or the timeout passes. Agents loop, passing `cursor` back as `since`. |
-| `get_branch_context` | branchId, limit = 200 | session, branch with owner, `forkedFrom`, the root-to-head path (including history inherited from the fork), and the session's other branches |
+| `get_branch_context` | branchId, limit = 200 | session, the session's `brief` and `briefUpdatedAt`, branch with owner, `forkedFrom`, the root-to-head path (including history inherited from the fork), and the session's other branches |
 | `share_to_main` | branchId | branch owner only: posts an AI summary of the branch's own messages into main, linked by `shared_from_branch_id`; returns that message |
+| `update_brief` | sessionId, content, baseUpdatedAt | any member: replaces the session's project brief; `baseUpdatedAt` must match the stored `briefUpdatedAt` (null if never set), otherwise a conflict error |
 | `set_working` | branchId, working = true | re-sends a `typing` event with the agent's label every 3 s ("Claude is working…") until the agent posts on that branch, turns it off, or 5 min pass |
 
 Each tool description says **when** an agent should use it. Example for `read_branch`: *"Read the conversation in a branch of a multiplayer chat session. Use this to catch up on what your team discussed before acting."*
@@ -290,7 +292,7 @@ Stretch goal: a local stdio MCP mode (`npx tandem-mcp`) that reuses the desktop 
 - **Sign-in**: GitHub button, a field to paste the fallback code, and a display name field with Continue as guest.
 - **Home**: the user's sessions, New session (title and default model), and Join (invite code or link).
 - **Session** (three columns):
-  - **Left**: title, Copy invite link, online count, and the member list with online dots and agent badges. Below that, the branch tree, with main at the top.
+  - **Left**: title, Copy invite link, online count, a **Project brief** card that opens the brief to read or edit (any member; a save from an outdated version is refused and the draft kept), and the member list with online dots and agent badges. Below that, the branch tree, with main at the top.
   - **Center**: messages for the selected branch, each with author, time, and model for AI messages. Markdown and code blocks render with syntax highlighting. Hovering a message shows **Branch from here**. A typing indicator shows who is typing in this branch.
   - **Bottom**: the composer, plus a model dropdown for the branch owner. Non-owners see a disabled composer with a **Branch from latest message** button.
   - **Right** (build last): the message tree visual.

@@ -22,6 +22,9 @@ export const sessions = sqliteTable('sessions', {
   defaultModel: text('default_model').notNull(),
   inviteCode: text('invite_code').notNull().unique(),
   createdAt: text('created_at').notNull(),
+  brief: text('brief').notNull().default(''),
+  briefUpdatedAt: text('brief_updated_at'),
+  briefUpdatedBy: text('brief_updated_by'),
 })
 
 export const sessionMembers = sqliteTable('session_members', {

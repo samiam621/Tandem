@@ -1,13 +1,13 @@
 import { eq, inArray } from 'drizzle-orm'
 import OpenAI from 'openai'
 import { getDb } from '../db/index.js'
-import { messages, branches, users } from '../db/schema.js'
+import { messages, branches, users, sessions } from '../db/schema.js'
 import { bus } from '../events.js'
 import { assertModelAllowed } from './models.js'
 import { buildChatContext } from './context.js'
 
 // ─── Context builder ──────────────────────────────────────────────────────────
-// Loads the session's messages and speaker names; the pure mapping lives in context.ts.
+// Loads the session's messages, speaker names and brief; the pure mapping lives in context.ts.
 
 function buildContext(sessionId: string, pendingMsgId: string) {
   const db = getDb()
@@ -17,7 +17,8 @@ function buildContext(sessionId: string, pendingMsgId: string) {
     db.select({ id: users.id, name: users.displayName }).from(users).where(inArray(users.id, authorIds)).all()
       .map((u) => [u.id, u.name]),
   )
-  return buildChatContext(rows, pendingMsgId, nameById)
+  const brief = db.select({ brief: sessions.brief }).from(sessions).where(eq(sessions.id, sessionId)).get()?.brief ?? ''
+  return buildChatContext(rows, pendingMsgId, nameById, brief)
 }
 
 // ─── Summarize (Share to main) ────────────────────────────────────────────────

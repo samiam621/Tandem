@@ -4,7 +4,8 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { z } from 'zod'
 import { resolveToken } from '../services/auth.js'
 import type { Actor } from '../services/auth.js'
-import { listSessions, getSession, getSessionBranches } from '../services/sessions.js'
+import { listSessions, getSession, getSessionBranches, updateBrief } from '../services/sessions.js'
+import { BRIEF_MAX_CHARS } from '@tandem/shared'
 import { getBranchMessages, postMessage, shareBranch } from '../services/messages.js'
 import { createBranch } from '../services/branches.js'
 import { listModels } from '../ai/models.js'
@@ -110,7 +111,7 @@ function buildMcpServer(actor: Actor) {
   // ─── get_branch_context ───────────────────────────────────────────────────
   server.tool(
     'get_branch_context',
-    "Get everything you need before working on a branch: its whole conversation from the session's start through the fork point (oldest first), who owns it and which branch it split from, and the session's other branches. Call this after being mentioned and before replying, so you are on the same page as the team.",
+    "Get everything you need before working on a branch: the session's project brief (specs, docs, decisions; always the latest version), the branch's whole conversation from the session's start through the fork point (oldest first), who owns it and which branch it split from, and the session's other branches. Call this after being mentioned and before replying, so you are on the same page as the team.",
     {
       branchId: z.string().describe('The branch ID'),
       limit: z.number().int().min(1).max(500).default(200).describe('Max messages to return (newest kept)'),
@@ -143,6 +144,24 @@ function buildMcpServer(actor: Actor) {
     async ({ branchId }) => {
       try {
         return { content: [{ type: 'text' as const, text: JSON.stringify(await shareBranch(actor, branchId)) }] }
+      } catch (err: unknown) {
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }] }
+      }
+    },
+  )
+
+  // ─── update_brief ─────────────────────────────────────────────────────────
+  server.tool(
+    'update_brief',
+    "Replace the session's shared project brief: the markdown document holding the team's specs, docs and decisions. Every branch's AI reads the latest brief, so use this when the team agrees on a spec or decision that every workstream should follow. Read it first with get_branch_context, edit the full text, and pass its briefUpdatedAt as baseUpdatedAt; if a teammate saved in between you get a conflict error, so read it again and reapply your change.",
+    {
+      sessionId: z.string().describe('The session ID'),
+      content: z.string().max(BRIEF_MAX_CHARS).describe('The full new brief, in markdown'),
+      baseUpdatedAt: z.string().nullable().describe('briefUpdatedAt from get_branch_context (null if the brief was never set)'),
+    },
+    async ({ sessionId, content, baseUpdatedAt }) => {
+      try {
+        return { content: [{ type: 'text' as const, text: JSON.stringify(updateBrief(actor, sessionId, content, baseUpdatedAt)) }] }
       } catch (err: unknown) {
         return { content: [{ type: 'text' as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }] }
       }
