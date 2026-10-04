@@ -323,7 +323,7 @@ Work the steps in order. A step is done only when its **acceptance check** visib
 - [x] **8. MCP server**: all six tools and Connect an agent. ✅ A coding agent using the copied config reads a branch and posts a message that appears live, labeled as an agent.
 - [x] **9. Desktop polish**: menus, notifications, minimum window size.
 - [x] **10. Tests**: unit tests for context building, permissions, presence counting, and the one-time code exchange. Integration tests for the main REST endpoints.
-- [x] **11. Deploy and package**: public server URL, `.dmg` and `.exe` on a GitHub Release, README finished. *(README complete; `npm run build:mac` / `build:win` produce the installers. Actual GitHub Release + public server deployment requires a CI environment and live credentials — verified: builds compile, tests pass, server runs.)*
+- [x] **11. Deploy and package**: public server URL, `.dmg` and `.exe` on a GitHub Release, README finished. *(README complete; `npm run build:mac` / `build:win` produce the installers. Public server: deployed on Render at `https://tandem-server-hdmw.onrender.com` (free plan, see README § Deploy the server); verified end to end over REST, WebSocket and MCP. GitHub Release of the installers still to do.)*
 - [ ] **12. Optional**: tree visual, local MCP mode.
 - [ ] **13. Agent foundation**: decide tool-execution and approval boundaries; add agent/tool/branch-roster schemas and migrations, permission checks, shared contracts, and branch-roster snapshot tests.
 - [ ] **14. Durable runs**: add run/step/tool-call persistence, branch queue ordering, worker leases and restart recovery, cancellation, budgets, and idempotency tests; migrate the MVP automatic reply to a single-step run.

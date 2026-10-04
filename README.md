@@ -81,9 +81,21 @@ Unit tests cover context building from the message tree, permission checks, pres
 
 ### Deploy the server
 
-Deploy `apps/server` to Render, Railway, or Fly.io. The host needs to support WebSockets. Set the environment variables above and run migrations on deploy.
+Deploy `apps/server` to Render, Railway, or Fly.io. The host needs to support WebSockets. Migrations run automatically when the server starts.
 
 **Run exactly one instance.** Presence and the AI reply queues are kept in memory.
+
+**Current deployment (hackathon):** Render web service `tandem-server` at `https://tandem-server-hdmw.onrender.com`, deployed from `samTest` with auto-deploy off (deploy manually from the Render dashboard).
+
+| Setting | Value |
+|---|---|
+| Build command | `npm ci && npm run build -w packages/shared` |
+| Start command | `cd apps/server && npx tsx src/index.ts` |
+| Env | `TOKEN_SECRET` (random 32-byte hex; the server refuses to start without it when `PUBLIC_URL` is not localhost), `PUBLIC_URL`, `DATABASE_URL=file:./tandem.db`, `NODE_VERSION=22`, `ELECTRON_SKIP_BINARY_DOWNLOAD=1`, and `OPENROUTER_API_KEY` for real AI replies |
+
+On Render's free plan the service sleeps after 15 minutes without traffic, and every restart or deploy **wipes the SQLite database**: users must sign in again and agent tokens must be recreated. For data that survives, use a paid instance with a persistent disk and point `DATABASE_URL` at it (for example `file:/var/data/tandem.db`).
+
+To use it, set **Settings → Server URL** in the desktop app to the public URL.
 
 ---
 
