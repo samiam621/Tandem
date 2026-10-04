@@ -86,7 +86,7 @@ npm run dev                         # starts the server and opens the desktop ap
 
 The server creates and migrates its SQLite database on startup (`npm run db:migrate` does it by hand). Check it is up: `curl http://localhost:3000/api/health`.
 
-`npm run dev` uses the local server; installed builds use the hosted one. Change it any time in **Settings → Server URL**. Only one copy of the app runs per computer, so test multiplayer with a second computer pointed at the same server, or with the end-to-end script below.
+`npm run dev` uses the local server; installed builds use the hosted one. Change it any time in **Settings → Server URL**. Installed builds run one copy per computer. In dev, test multiplayer on one machine by running `npm run dev:second` alongside `npm run dev`: the second window has its own profile, token, and guest identity. You can also use a second computer pointed at the same server, or the end-to-end script below.
 
 ### Environment variables (server)
 
@@ -94,6 +94,7 @@ The server creates and migrates its SQLite database on startup (`npm run db:migr
 |---|---|
 | `DATABASE_URL` | SQLite file, e.g. `file:./tandem.db` |
 | `OPENROUTER_API_KEY` | OpenRouter key. Stays on the server and is never sent to clients. |
+| `OPENROUTER_ALLOW_PAID` | `true` to allow paid models. Otherwise only `:free` models are listed and called. Default `false`. |
 | `GITHUB_CLIENT_ID` | GitHub OAuth app client ID (optional) |
 | `GITHUB_CLIENT_SECRET` | GitHub OAuth app client secret (optional) |
 | `TOKEN_SECRET` | Secret used to hash access tokens. Required when `PUBLIC_URL` is not localhost. |
@@ -105,6 +106,7 @@ The server creates and migrates its SQLite database on startup (`npm run db:migr
 | Command | What it does |
 |---|---|
 | `npm run dev` | Server and desktop app in watch mode |
+| `npm run dev:second` | Second desktop window with its own profile, for multiplayer testing. Needs `npm run dev` running. |
 | `npm test` | Vitest across all workspaces |
 | `npm run typecheck` | `tsc` across all workspaces |
 | `npm run db:migrate` | Apply Drizzle migrations |

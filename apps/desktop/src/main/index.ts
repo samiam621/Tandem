@@ -1,3 +1,4 @@
+import { profile } from './profile.js'
 import { app, BrowserWindow, shell } from 'electron'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -9,12 +10,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // ─── Protocol handler ─────────────────────────────────────────────────────────
 // Register tandem:// scheme so the OS routes links to this app.
 // On Windows in dev mode we must pass the execPath + script path.
-if (process.defaultApp) {
-  if (process.argv.length >= 2) {
-    app.setAsDefaultProtocolClient('tandem', process.execPath, [path.resolve(process.argv[1])])
+// Extra dev profiles skip this so tandem:// links keep going to the main instance.
+if (!profile) {
+  if (process.defaultApp) {
+    if (process.argv.length >= 2) {
+      app.setAsDefaultProtocolClient('tandem', process.execPath, [path.resolve(process.argv[1])])
+    }
+  } else {
+    app.setAsDefaultProtocolClient('tandem')
   }
-} else {
-  app.setAsDefaultProtocolClient('tandem')
 }
 
 const singleInstance = app.requestSingleInstanceLock()
@@ -43,8 +47,11 @@ function createWindow() {
   })
 
   // Load renderer
-  if (process.env.ELECTRON_RENDERER_URL) {
-    mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
+  // A dev profile launched outside electron-vite reuses the already running renderer dev server
+  const rendererUrl =
+    process.env.ELECTRON_RENDERER_URL ?? (profile && !app.isPackaged ? 'http://localhost:5173' : undefined)
+  if (rendererUrl) {
+    mainWindow.loadURL(rendererUrl)
   } else {
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'))
   }

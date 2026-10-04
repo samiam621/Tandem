@@ -3,6 +3,7 @@ import OpenAI from 'openai'
 import { getDb } from '../db/index.js'
 import { messages, branches } from '../db/schema.js'
 import { bus } from '../events.js'
+import { assertModelAllowed } from './models.js'
 
 // ─── Context builder ──────────────────────────────────────────────────────────
 // Builds the message path from root to the pending assistant message,
@@ -53,6 +54,7 @@ export async function summarize(model: string, transcript: string): Promise<stri
   const apiKey = process.env.OPENROUTER_API_KEY
   if (!apiKey) return `[Dev mode: no OPENROUTER_API_KEY set. Model: ${model}. Summary of ${transcript.split('\n').length} messages would appear here.]`
 
+  assertModelAllowed(model)
   const client = new OpenAI({ apiKey, baseURL: 'https://openrouter.ai/api/v1', defaultHeaders: { 'X-Title': 'Tandem' } })
   const res = await client.chat.completions.create({
     model,
@@ -93,6 +95,7 @@ export async function generateReply(branchId: string, pendingMsgId: string, sess
       return
     }
 
+    assertModelAllowed(branch.model)
     const client = new OpenAI({
       apiKey,
       baseURL: 'https://openrouter.ai/api/v1',

@@ -101,7 +101,8 @@ apps/
     src/services/           business logic: auth, sessions, branches, messages, agents
     src/runs/               durable run lifecycle, queue/worker, recovery, cancellation
     src/tools/              tool registry, schema validation, executor interface
-    src/ai/                 model-provider interface, OpenRouter adapter, streaming
+    src/ai/                 model-provider interface, OpenRouter adapter, streaming, model list
+                            (only `:free` models are listed or called unless OPENROUTER_ALLOW_PAID=true)
     src/db/                 Drizzle schema, migrations, repositories/queries
     src/lib/                shared server utilities (tokens, rate limits, validation)
     src/events.ts           typed domain events and in-process publisher
@@ -263,7 +264,7 @@ The MCP server uses `@modelcontextprotocol/sdk` with the Streamable HTTP transpo
 | `read_branch` | branchId, limit = 50 | newest messages on the branch path, oldest first, with author and model |
 | `post_message` | branchId, content, triggerAi = false | created message; if `triggerAi`, waits for and returns the AI reply |
 | `create_branch` | fromMessageId, model, name? | new branch |
-| `list_models` | — | model IDs and names |
+| `list_models` | — | model IDs and names (only `:free` models unless `OPENROUTER_ALLOW_PAID=true`) |
 | `wait_for_mentions` | since?, timeoutSeconds = 25 (max 50) | `{ mentions, cursor }`: @mentions of this agent token after `since` in the user's sessions; waits until one arrives or the timeout passes. Agents loop, passing `cursor` back as `since`. |
 | `get_branch_context` | branchId, limit = 200 | session, branch with owner, `forkedFrom`, the root-to-head path (including history inherited from the fork), and the session's other branches |
 | `share_to_main` | branchId | branch owner only: posts an AI summary of the branch's own messages into main, linked by `shared_from_branch_id`; returns that message |

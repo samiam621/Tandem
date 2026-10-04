@@ -7,6 +7,7 @@ import type { Actor } from '../services/auth.js'
 import { listSessions, getSession, getSessionBranches } from '../services/sessions.js'
 import { getBranchMessages, postMessage, shareBranch } from '../services/messages.js'
 import { createBranch } from '../services/branches.js'
+import { listModels } from '../ai/models.js'
 import { waitForMentions, getBranchContext, setWorking } from '../services/agents.js'
 import { eq } from 'drizzle-orm'
 import { getDb } from '../db/index.js'
@@ -173,28 +174,10 @@ function buildMcpServer(actor: Actor) {
     'List available AI models that can be used when creating branches or sessions.',
     {},
     async () => {
-      const key = process.env.OPENROUTER_API_KEY
-      if (!key) {
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify([
-              { id: 'openai/gpt-4o', name: 'GPT-4o' },
-              { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini' },
-              { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet' },
-            ]),
-          }],
-        }
-      }
-      const res = await fetch('https://openrouter.ai/api/v1/models', {
-        headers: { Authorization: `Bearer ${key}` },
-      })
-      const data = (await res.json()) as { data: { id: string; name: string }[] }
-      return {
-        content: [{
-          type: 'text' as const,
-          text: JSON.stringify(data.data.map((m) => ({ id: m.id, name: m.name }))),
-        }],
+      try {
+        return { content: [{ type: 'text' as const, text: JSON.stringify(await listModels()) }] }
+      } catch {
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'upstream_error' }) }] }
       }
     },
   )
