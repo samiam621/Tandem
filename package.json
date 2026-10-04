@@ -1,0 +1,23 @@
+{
+  "name": "tandem",
+  "private": true,
+  "workspaces": [
+    "apps/desktop",
+    "apps/server",
+    "packages/shared"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n server,desktop -c cyan,magenta \"npm run dev --workspace=apps/server\" \"npm run dev --workspace=apps/desktop\"",
+    "build:mac": "npm run build --workspace=apps/desktop -- --mac",
+    "build:win": "npm run build --workspace=apps/desktop -- --win",
+    "typecheck": "tsc --build tsconfig.json",
+    "test": "vitest run --reporter=verbose",
+    "db:migrate": "npm run db:migrate --workspace=apps/server"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "drizzle-orm": "^0.45.3",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  }
+}
