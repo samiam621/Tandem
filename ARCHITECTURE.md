@@ -16,7 +16,7 @@ These describe the shipped MVP and should remain compatible as agent chat is add
 | Branch visibility | Every session member can **read** every branch. Only the branch owner can **post** in it. Any member can post in main. |
 | Identity | GitHub sign-in through the system browser, or guest. A guest gets a random device ID saved locally and picks a display name. One user = one account or one device ID. |
 | Token storage | The server issues an access token. The desktop app encrypts it with Electron `safeStorage` (the OS keychain) and keeps the ciphertext in `electron-store`. |
-| Models | The MVP's automatic reply uses the branch's model through OpenRouter's OpenAI-compatible API, with streaming. |
+| Models | The branch model must be an OpenRouter `:free` id (`FreeModelIdSchema` in `packages/shared`). The automatic reply streams through OpenRouter's OpenAI-compatible API. |
 | API key | One `OPENROUTER_API_KEY`, held only on the server. Users do not bring their own keys. |
 | MCP identity | MCP clients act as their token's user. Their messages carry that user's `author_id` and `author_type = agent`; this is distinct from a configured, first-class Tandem agent. |
 | Context | Model context is built from the current branch's root-to-head path; sibling-branch messages are excluded. |
@@ -263,7 +263,7 @@ The MCP server uses `@modelcontextprotocol/sdk` with the Streamable HTTP transpo
 | `read_branch` | branchId, limit = 50 | newest messages on the branch path, oldest first, with author and model |
 | `post_message` | branchId, content, triggerAi = false | created message; if `triggerAi`, waits for and returns the AI reply |
 | `create_branch` | fromMessageId, model, name? | new branch |
-| `list_models` | — | model IDs and names |
+| `list_models` | — | free model IDs and names (`:free` ids only) |
 | `wait_for_mentions` | since?, timeoutSeconds = 25 (max 50) | `{ mentions, cursor }`: @mentions of this agent token after `since` in the user's sessions; waits until one arrives or the timeout passes. Agents loop, passing `cursor` back as `since`. |
 | `get_branch_context` | branchId, limit = 200 | session, branch with owner, `forkedFrom`, the root-to-head path (including history inherited from the fork), and the session's other branches |
 | `share_to_main` | branchId | branch owner only: posts an AI summary of the branch's own messages into main, linked by `shared_from_branch_id`; returns that message |

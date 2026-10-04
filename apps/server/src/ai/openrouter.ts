@@ -3,7 +3,9 @@ import OpenAI from 'openai'
 import { getDb } from '../db/index.js'
 import { messages, branches } from '../db/schema.js'
 import { bus } from '../events.js'
-import { isFreeModelId } from './models.js'
+// isFreeModelId is the backstop guard — even if a stored model somehow passed validation,
+// this ensures we never call a paid model. Source of truth lives in @tandem/shared.
+import { isFreeModelId } from '@tandem/shared'
 
 // ─── Context builder ──────────────────────────────────────────────────────────
 // Builds the message path from root to the pending assistant message,

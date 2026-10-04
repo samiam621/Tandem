@@ -29,6 +29,13 @@
       "when": 1791108170841,
       "tag": "0003_faulty_pete_wisdom",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1791200000000,
+      "tag": "0004_free_models",
+      "breakpoints": true
     }
   ]
 }

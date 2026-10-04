@@ -26,7 +26,8 @@ const ok = (label, cond) => { console.log(`${cond ? 'PASS' : 'FAIL'}  ${label}`)
 console.log(`Checking ${base}`)
 const sam = (await call('/api/auth/guest', null, { displayName: 'Sam', deviceId: 'e2e-sam-' + Date.now() })).body.token
 const alex = (await call('/api/auth/guest', null, { displayName: 'Alex', deviceId: 'e2e-alex-' + Date.now() })).body.token
-const created = (await call('/api/sessions', sam, { title: 'Public E2E', defaultModel: 'anthropic/claude-sonnet-4' })).body
+// Use the default free model so this script doesn't cost money or get rejected by the :free check
+const created = (await call('/api/sessions', sam, { title: 'Public E2E', defaultModel: 'meta-llama/llama-3.3-70b-instruct:free' })).body
 const sessionId = created.session.id, main = created.mainBranch.id
 ok('Alex joins with the invite code', (await call('/api/sessions/join', alex, { inviteCode: created.session.inviteCode })).status === 200)
 
@@ -65,7 +66,8 @@ const reply = await mcp(claude, 'post_message', { branchId: main, content: 'Plan
 ok('Claude replies, labelled "Claude"', reply.agentLabel === 'Claude')
 
 // Sam branches off from Claude's reply, works there, and shares the result back to main.
-const branch = (await call(`/api/sessions/${sessionId}/branches`, sam, { fromMessageId: reply.id, model: 'anthropic/claude-sonnet-4', name: 'e2e-branch' })).body
+// Use the default free model here too — paid model IDs are now rejected with 400
+const branch = (await call(`/api/sessions/${sessionId}/branches`, sam, { fromMessageId: reply.id, model: 'meta-llama/llama-3.3-70b-instruct:free', name: 'e2e-branch' })).body
 await call(`/api/branches/${branch.id}/messages`, sam, { content: 'Tried it on the branch: works.', triggerAi: false })
 const shared = await call(`/api/branches/${branch.id}/share`, sam, {})
 ok('Share to main posts a summary into main', shared.status === 201 && shared.body.branchId === main && shared.body.sharedFromBranchId === branch.id)

@@ -7,7 +7,6 @@ import { branches, sessionMembers } from '../db/schema.js'
 import { bus } from '../events.js'
 import { shareBranch } from '../services/messages.js'
 import type { Branch } from '@tandem/shared'
-import { isFreeModelId } from '../ai/models.js'
 
 function rowToBranch(row: typeof branches.$inferSelect): Branch {
   return {
@@ -24,15 +23,13 @@ function rowToBranch(row: typeof branches.$inferSelect): Branch {
 }
 
 export const branchRoutes: FastifyPluginAsync = async (app) => {
-  // PATCH /api/branches/:id
+  // PATCH /api/branches/:id — UpdateBranchSchema.model uses FreeModelIdSchema, so paid models are rejected by Zod
   app.patch('/api/branches/:id', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const body = UpdateBranchSchema.safeParse(req.body)
     if (!body.success) {
+      // Zod failures include the :free check, so the code is always invalid_request
       return reply.code(400).send({ error: { code: 'invalid_request', message: body.error.message } })
-    }
-    if (body.data.model && !isFreeModelId(body.data.model)) {
-      return reply.code(400).send({ error: { code: 'free_model_required', message: 'Select an OpenRouter model with the :free suffix.' } })
     }
 
     const db = getDb()
