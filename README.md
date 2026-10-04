@@ -79,7 +79,7 @@ npm test
 
 Unit tests cover context building from the message tree, permission checks, presence counting, the one-time code exchange, and @mention matching. Integration tests cover the main REST endpoints and the agent services behind the MCP tools: mentions (including that outsiders never see them), branch context, the working indicator, and Share to main.
 
-To check a running server end to end (REST, live WebSocket events, the MCP tools Claude uses, and Share to main), run the script below against it. It creates two guests and a session there. Needs Node 22+.
+To check a running server end to end (REST, live WebSocket events, the MCP tools Claude uses, Share to main, and that non-members get no live events), run the script below against it. Use `http://localhost:3000` for your local server. It creates two guests and a session there. Needs Node 22+.
 
 ```bash
 node apps/server/scripts/e2e.mjs https://tandem-server-hdmw.onrender.com
@@ -180,6 +180,16 @@ Some clients name the transport `"http"` instead of `"streamable-http"`.
 
 **Tools:** `list_sessions`, `get_session`, `read_branch`, `post_message`, `create_branch`, `list_models`, `wait_for_mentions`, `get_branch_context`, `set_working`, `share_to_main`. An agent loops on `wait_for_mentions`, reads the branch with `get_branch_context`, calls `set_working`, and replies with `post_message`. Messages an agent posts appear live in the app with an agent label.
 
+**Claude Code as a teammate.** After `claude mcp add`, start `claude` and paste:
+
+```
+You're my teammate "Claude" in Tandem. Loop forever: call wait_for_mentions (pass the
+previous cursor as since). For each mention: get_branch_context for its branch,
+set_working, do what was asked, then post_message your answer to that branch.
+```
+
+Teammates then type `@Claude …` in any branch. The token's label is the name they mention.
+
 ---
 
 ## Project layout
@@ -191,3 +201,22 @@ packages/shared  Shared types and Zod schemas
 ```
 
 For more detail, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
+---
+
+## Contributing: branches and pull requests
+
+Work on a branch, never directly on `main`, and merge through a pull request.
+
+```bash
+git switch main && git pull                 # start from the latest main
+git switch -c my-feature                    # new branch (or: git switch samTest)
+# ...edit, then check:
+npm run typecheck && npm test
+git add <the files you changed>             # not `git add -A`: keeps others' work out
+git commit -m "Short summary of the change"
+git push -u origin my-feature               # first push; afterwards just `git push`
+gh pr create --base main --title "..." --body "..."   # or open the link git prints
+```
+
+Pushing more commits to the same branch updates its open pull request. Merge on GitHub once checks and review pass, then `git switch main && git pull` locally. `.env` and `tandem.db` are ignored by git and must never be committed.

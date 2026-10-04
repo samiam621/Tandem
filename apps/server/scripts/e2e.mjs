@@ -31,17 +31,25 @@ const sessionId = created.session.id, main = created.mainBranch.id
 ok('Alex joins with the invite code', (await call('/api/sessions/join', alex, { inviteCode: created.session.inviteCode })).status === 200)
 
 // Alex listens on the WebSocket like the desktop app does.
-const ws = new WebSocket(base.replace(/^http/, 'ws') + '/ws')
-const events = []
-await new Promise((resolve, reject) => {
-  ws.addEventListener('open', () => {
-    ws.send(JSON.stringify({ type: 'auth', payload: { token: alex } }))
-    ws.send(JSON.stringify({ type: 'join_session', payload: { sessionId } }))
-    setTimeout(resolve, 1500)
+// Auth and join_session are sent back to back, exactly as the desktop app does.
+const listen = async (token) => {
+  const socket = new WebSocket(base.replace(/^http/, 'ws') + '/ws')
+  const received = []
+  socket.addEventListener('message', (e) => received.push(JSON.parse(e.data)))
+  await new Promise((resolve, reject) => {
+    socket.addEventListener('open', () => {
+      socket.send(JSON.stringify({ type: 'auth', payload: { token } }))
+      socket.send(JSON.stringify({ type: 'join_session', payload: { sessionId } }))
+      setTimeout(resolve, 1500)
+    })
+    socket.addEventListener('error', () => reject(new Error('WebSocket failed to connect')))
   })
-  ws.addEventListener('error', () => reject(new Error('WebSocket failed to connect')))
-})
-ws.addEventListener('message', (e) => events.push(JSON.parse(e.data)))
+  return { socket, received }
+}
+const { socket: ws, received: events } = await listen(alex)
+// Mallory is signed in but not a member; she must not receive this session's live events.
+const mallory = (await call('/api/auth/guest', null, { displayName: 'Mallory', deviceId: 'e2e-mallory-' + Date.now() })).body.token
+const { socket: malloryWs, received: malloryEvents } = await listen(mallory)
 
 const claude = (await call('/api/tokens', sam, { label: 'Claude' })).body.rawToken
 const waiting = mcp(claude, 'wait_for_mentions', { timeoutSeconds: 20 })
@@ -64,9 +72,11 @@ ok('Share to main posts a summary into main', shared.status === 201 && shared.bo
 
 await new Promise((r) => setTimeout(r, 1500))
 ws.close()
+malloryWs.close()
 const seen = events.filter((e) => e.type === 'message_created').map((e) => e.payload.content)
 ok('Alex sees the mention live over WebSocket', seen.includes('@Claude what is the plan?'))
 ok('Alex sees Claude\'s reply live over WebSocket', seen.includes('Plan: ship it.'))
 ok('Alex sees "Claude is working…"', events.some((e) => e.type === 'typing' && e.payload.agentLabel === 'Claude'))
 ok('No built-in AI reply to the @mention', !events.some((e) => e.type === 'message_created' && e.payload.authorType === 'assistant' && !e.payload.sharedFromBranchId))
 ok('Alex sees the shared summary live in main', events.some((e) => e.type === 'message_created' && e.payload.sharedFromBranchId === branch.id))
+ok('A non-member gets none of the session\'s live events', malloryEvents.length === 0)

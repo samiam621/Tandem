@@ -4,6 +4,7 @@ import type { WsClientFrame } from '@tandem/shared'
 import { resolveToken } from '../services/auth.js'
 import { joinPresence, leavePresence, buildOnlineUserList } from './presence.js'
 import { bus } from '../events.js'
+import { isSessionMember } from '../services/sessions.js'
 
 // Must import broadcaster to activate the bus subscription
 import './broadcaster.js'
@@ -18,7 +19,14 @@ export const wsHandler: FastifyPluginAsync = async (app) => {
       if (!actor) socket.socket.close(4001, 'Authentication timeout')
     }, 5000)
 
-    socket.on('data', async (raw: Buffer) => {
+    // Handle frames strictly in order: auth resolves asynchronously, and a join_session sent
+    // right after it (as the desktop app does) must not be processed before auth finishes.
+    let queue = Promise.resolve()
+    socket.on('data', (raw: Buffer) => {
+      queue = queue.then(() => handleFrame(raw)).catch((err) => app.log.error(err, 'WebSocket frame failed'))
+    })
+
+    async function handleFrame(raw: Buffer) {
       let frame: WsClientFrame
       try {
         frame = JSON.parse(raw.toString()) as WsClientFrame
@@ -42,6 +50,7 @@ export const wsHandler: FastifyPluginAsync = async (app) => {
       switch (frame.type) {
         case 'join_session': {
           const { sessionId } = frame.payload
+          if (!isSessionMember(sessionId, actor.userId)) return // only members get a session's live events
           joinPresence(sessionId, actor.userId, socket)
           joinedSessions.add(sessionId)
 
@@ -61,6 +70,7 @@ export const wsHandler: FastifyPluginAsync = async (app) => {
 
         case 'typing': {
           const { sessionId, branchId } = frame.payload
+          if (!joinedSessions.has(sessionId)) return
           bus.emitSession(sessionId, {
             type: 'typing',
             payload: { userId: actor.userId, branchId },
@@ -68,7 +78,7 @@ export const wsHandler: FastifyPluginAsync = async (app) => {
           break
         }
       }
-    })
+    }
 
     socket.on('close', async () => {
       clearTimeout(authTimeout)

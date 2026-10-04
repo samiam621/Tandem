@@ -216,7 +216,7 @@ All clients use `Authorization: Bearer <token>`. No cookies.
 
 ## Real-time (WebSocket `/ws`)
 
-Each app window opens one socket. The first frame must be `{ "type": "auth", "payload": { "token" } }`, or the server closes the socket after 5 s. Every frame is `{ type, payload }`. The client reconnects with exponential backoff and, after reconnecting, re-sends `join_session` and refetches the open branch.
+Each app window opens one socket. The first frame must be `{ "type": "auth", "payload": { "token" } }`, or the server closes the socket after 5 s. Every frame is `{ type, payload }`. The client reconnects with exponential backoff and, after reconnecting, re-sends `join_session` and refetches the open branch. The server handles each socket's frames strictly in order, so a `join_session` sent right after `auth` waits for auth to finish. It ignores `join_session` for sessions the user is not a member of, and `typing` for sessions the socket has not joined.
 
 | Dir | Type | Payload |
 |---|---|---|
