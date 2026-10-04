@@ -159,7 +159,7 @@ claude mcp add --transport http tandem <SERVER_URL>/mcp \
 
 Some clients name the transport `"http"` instead of `"streamable-http"`.
 
-**Tools:** `list_sessions`, `get_session`, `read_branch`, `post_message`, `create_branch`, `list_models`. Messages an agent posts appear live in the app with an agent label.
+**Tools:** `list_sessions`, `get_session`, `read_branch`, `post_message`, `create_branch`, `list_models`, `wait_for_mentions`, `get_branch_context`, `set_working`. An agent loops on `wait_for_mentions`, reads the branch with `get_branch_context`, calls `set_working`, and replies with `post_message`. Messages an agent posts appear live in the app with an agent label.
 
 ---
 

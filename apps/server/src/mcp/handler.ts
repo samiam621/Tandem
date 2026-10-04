@@ -7,6 +7,7 @@ import type { Actor } from '../services/auth.js'
 import { listSessions, getSession, getSessionBranches } from '../services/sessions.js'
 import { getBranchMessages, postMessage } from '../services/messages.js'
 import { createBranch } from '../services/branches.js'
+import { waitForMentions, getBranchContext, setWorking } from '../services/agents.js'
 import { eq } from 'drizzle-orm'
 import { getDb } from '../db/index.js'
 import { messages, users } from '../db/schema.js'
@@ -86,6 +87,50 @@ function buildMcpServer(actor: Actor) {
       } catch (err: unknown) {
         return { content: [{ type: 'text' as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }] }
       }
+    },
+  )
+
+  // ─── wait_for_mentions ────────────────────────────────────────────────────
+  server.tool(
+    'wait_for_mentions',
+    'Wait until a teammate @mentions you (your agent token label) in a Tandem session. Call this in a loop: pass the returned cursor back as `since` so no mention is missed. Returns as soon as there is a mention, or an empty list after the timeout; then call it again. For each mention, call get_branch_context, then set_working, then reply with post_message on that branch.',
+    {
+      since: z.string().optional().describe('Cursor from the previous call. Omit on the first call to wait for new mentions only.'),
+      timeoutSeconds: z.number().int().min(1).max(50).default(25).describe('How long to wait before returning an empty list'),
+    },
+    async ({ since, timeoutSeconds }) => {
+      const from = since ?? new Date().toISOString()
+      const mentions = await waitForMentions(actor, from, timeoutSeconds * 1000)
+      const cursor = mentions.length ? mentions[mentions.length - 1].createdAt : from
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ mentions, cursor }) }] }
+    },
+  )
+
+  // ─── get_branch_context ───────────────────────────────────────────────────
+  server.tool(
+    'get_branch_context',
+    "Get everything you need before working on a branch: its whole conversation from the session's start through the fork point (oldest first), who owns it and which branch it split from, and the session's other branches. Call this after being mentioned and before replying, so you are on the same page as the team.",
+    {
+      branchId: z.string().describe('The branch ID'),
+      limit: z.number().int().min(1).max(500).default(200).describe('Max messages to return (newest kept)'),
+    },
+    async ({ branchId, limit }) => {
+      const context = await getBranchContext(actor, branchId, limit)
+      return { content: [{ type: 'text' as const, text: JSON.stringify(context ?? { error: 'not_found' }) }] }
+    },
+  )
+
+  // ─── set_working ──────────────────────────────────────────────────────────
+  server.tool(
+    'set_working',
+    'Show teammates that you are working on a branch ("<your label> is working…"). Call with working=true when you start on a mention. It clears automatically when you post_message to that branch, or after 5 minutes; call with working=false to clear it early.',
+    {
+      branchId: z.string().describe('The branch ID'),
+      working: z.boolean().default(true),
+    },
+    async ({ branchId, working }) => {
+      const ok = setWorking(actor, branchId, working)
+      return { content: [{ type: 'text' as const, text: JSON.stringify(ok ? { ok: true } : { error: 'not_found' }) }] }
     },
   )
 

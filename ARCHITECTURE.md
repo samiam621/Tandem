@@ -264,6 +264,9 @@ The MCP server uses `@modelcontextprotocol/sdk` with the Streamable HTTP transpo
 | `post_message` | branchId, content, triggerAi = false | created message; if `triggerAi`, waits for and returns the AI reply |
 | `create_branch` | fromMessageId, model, name? | new branch |
 | `list_models` | — | model IDs and names |
+| `wait_for_mentions` | since?, timeoutSeconds = 25 (max 50) | `{ mentions, cursor }`: @mentions of this agent token after `since` in the user's sessions; waits until one arrives or the timeout passes. Agents loop, passing `cursor` back as `since`. |
+| `get_branch_context` | branchId, limit = 200 | session, branch with owner, `forkedFrom`, the root-to-head path (including history inherited from the fork), and the session's other branches |
+| `set_working` | branchId, working = true | re-sends a `typing` event with the agent's label every 3 s ("Claude is working…") until the agent posts on that branch, turns it off, or 5 min pass |
 
 Each tool description says **when** an agent should use it. Example for `read_branch`: *"Read the conversation in a branch of a multiplayer chat session. Use this to catch up on what your team discussed before acting."*
 

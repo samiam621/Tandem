@@ -10,6 +10,9 @@ import { messageRoutes } from '../routes/messages.js'
 import { modelsRoute } from '../routes/models.js'
 import { tokenRoutes } from '../routes/tokens.js'
 import { recoverStaleMessages } from '../services/messages.js'
+import { resolveToken } from '../services/auth.js'
+import { listMentions, waitForMentions, getBranchContext, setWorking } from '../services/agents.js'
+import { bus } from '../events.js'
 import Database from 'better-sqlite3'
 import { drizzle } from 'drizzle-orm/better-sqlite3'
 import * as schema from '../db/schema.js'
@@ -59,6 +62,7 @@ describe('REST integration', () => {
   let userId: string
   let sessionId: string
   let mainBranchId: string
+  let claudeToken: string
 
   beforeAll(async () => {
     app = await buildApp()
@@ -191,6 +195,7 @@ describe('REST integration', () => {
       headers: { authorization: `Bearer ${token}` },
       payload: { label: 'Claude' },
     })
+    claudeToken = created.json().rawToken
     const res = await app.inject({
       method: 'POST', url: `/api/branches/${mainBranchId}/messages`,
       headers: { authorization: `Bearer ${created.json().rawToken}` },
@@ -229,6 +234,71 @@ describe('REST integration', () => {
     const rows = testDb.select().from(schema.messageMentions).all()
     expect(rows.map((r) => r.messageId)).toEqual([res.json().userMessage.id])
   })
+
+  it('listMentions returns mentions of this agent token only', async () => {
+    const claude = (await resolveToken(claudeToken))!
+    expect(listMentions(claude, '')).toMatchObject([
+      { branchId: mainBranchId, branchName: 'main', authorDisplayName: 'TestUser', content: '@claude please review this' },
+    ])
+    const other = (await resolveToken(token))!
+    expect(listMentions(other, '')).toEqual([])
+  })
+
+  it('waitForMentions resolves when a new mention arrives, and times out with []', async () => {
+    const claude = (await resolveToken(claudeToken))!
+    const cursor = listMentions(claude, '').at(-1)!.createdAt
+    expect(await waitForMentions(claude, cursor, 20)).toEqual([])
+
+    const waiting = waitForMentions(claude, cursor, 2000)
+    await app.inject({
+      method: 'POST', url: `/api/branches/${mainBranchId}/messages`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { content: 'over to you @Claude', triggerAi: false },
+    })
+    expect((await waiting).map((m) => m.content)).toEqual(['over to you @Claude'])
+  })
+
+  it('getBranchContext includes history up to the fork and nothing posted to main after it', async () => {
+    const auth = { authorization: `Bearer ${token}` }
+    const mainMsgs = (await app.inject({ method: 'GET', url: `/api/branches/${mainBranchId}/messages`, headers: auth })).json()
+    const forkMsg = mainMsgs.find((m: any) => m.content === 'Hello integration test!')
+    const branch = (await app.inject({
+      method: 'POST', url: `/api/sessions/${sessionId}/branches`, headers: auth,
+      payload: { fromMessageId: forkMsg.id, model: 'test-model', name: 'bugfix' },
+    })).json()
+    await app.inject({
+      method: 'POST', url: `/api/branches/${branch.id}/messages`, headers: auth,
+      payload: { content: 'branch work', triggerAi: false },
+    })
+
+    const claude = (await resolveToken(claudeToken))!
+    const ctx = (await getBranchContext(claude, branch.id, 200))!
+    expect(ctx.messages.map((m) => m.content)).toEqual(['Hello integration test!', 'branch work'])
+    expect(ctx.forkedFrom).toMatchObject({ branchId: mainBranchId, branchName: 'main', messageId: forkMsg.id })
+    expect(ctx.branch).toMatchObject({ name: 'bugfix', ownerDisplayName: 'TestUser' })
+    expect(ctx.otherBranches.map((b) => b.name)).toContain('main')
+    expect(await getBranchContext(claude, 'no-such-branch', 200)).toBeNull()
+  })
+
+  it('setWorking announces "<label> is working" until the agent posts', async () => {
+    const claude = (await resolveToken(claudeToken))!
+    const seen: any[] = []
+    const onEvent = ({ event }: any) => event.type === 'typing' && seen.push(event.payload)
+    bus.onSession(onEvent)
+    expect(setWorking(claude, 'no-such-branch', true)).toBe(false)
+    expect(setWorking(claude, mainBranchId, true)).toBe(true)
+    expect(seen.at(-1)).toMatchObject({ branchId: mainBranchId, agentLabel: 'Claude' })
+
+    await app.inject({
+      method: 'POST', url: `/api/branches/${mainBranchId}/messages`,
+      headers: { authorization: `Bearer ${claudeToken}` },
+      payload: { content: 'done!', triggerAi: false },
+    })
+    const count = seen.length
+    await new Promise((r) => setTimeout(r, 3500))
+    expect(seen.length).toBe(count) // pings stopped after the post
+    bus.offSession(onEvent)
+  }, 10000)
 
   it('POST /api/auth/exchange with invalid code → 401', async () => {
     const res = await app.inject({
