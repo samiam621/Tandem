@@ -15,6 +15,7 @@ export function Settings({ onClose }: Props) {
   const [serverUrl, setServerUrl] = useState('')
   const [serverUrlDraft, setServerUrlDraft] = useState('')
   const [loading, setLoading] = useState(false)
+  const [tokenError, setTokenError] = useState<string | null>(null)
 
   useEffect(() => {
     api.tokens.list().then(setTokens).catch(() => {})
@@ -28,11 +29,14 @@ export function Settings({ onClose }: Props) {
     e.preventDefault()
     if (!newLabel.trim()) return
     setLoading(true)
+    setTokenError(null)
     try {
       const result = await api.tokens.create(newLabel.trim())
       setTokens((prev) => [...prev, result.token])
       setJustCreated(result)
-      setNewLabel('')
+      setNewLabel('Claude')
+    } catch (err: any) {
+      setTokenError(err?.message ?? 'Failed to create token')
     } finally {
       setLoading(false)
     }
@@ -143,6 +147,13 @@ export function Settings({ onClose }: Props) {
                   Copy config
                 </button>
               </div>
+            </div>
+          )}
+
+          {tokenError && (
+            <div className="mb-3 flex items-center justify-between rounded-lg bg-red-900/30 border border-red-800 px-3 py-2">
+              <p className="text-xs text-red-400">{tokenError}</p>
+              <button onClick={() => setTokenError(null)} className="ml-2 text-xs text-red-300 hover:text-red-200">✕</button>
             </div>
           )}
 

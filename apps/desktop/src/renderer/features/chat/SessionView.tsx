@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react'
-import type { Session, Branch, Message, User } from '@tandem/shared'
+import type { Session, Branch, Message, User, SessionAgent } from '@tandem/shared'
 import { api } from '../../lib/api'
 import { useAuth } from '../../app/AuthContext'
 import { useWebSocket } from '../../lib/useWebSocket'
 import { MessageTreePanel } from './MessageTreePanel'
+import { MentionMenu, buildMentionItems, highlightMentions } from './MentionMenu'
 
 interface Props {
   session: Session
@@ -20,14 +21,29 @@ export function SessionView({ session, onBack }: Props) {
   // allMessages holds every branch's fetched messages for the tree visual
   const [allMessages, setAllMessages] = useState<Map<string, Message[]>>(new Map())
   const [members, setMembers] = useState<User[]>([])
+  const [agents, setAgents] = useState<SessionAgent[]>([])
   const [models, setModels] = useState<{ id: string; name: string }[]>([])
   const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set())
   const [composerText, setComposerText] = useState('')
   const [sending, setSending] = useState(false)
+  const [sendError, setSendError] = useState<string | null>(null)
   const [branchingFromMsg, setBranchingFromMsg] = useState<Message | null>(null)
+  const [branchError, setBranchError] = useState<string | null>(null)
   const [branchModel, setBranchModel] = useState('')
   const [branchName, setBranchName] = useState('')
+  // ── Share-to-main state ──────────────────────────────────────────────────────
+  const [sharingBranchId, setSharingBranchId] = useState<string | null>(null)
+  const [shareConfirm, setShareConfirm] = useState(false)
+  const [shareError, setShareError] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const composerRef = useRef<HTMLInputElement>(null)
+
+  // ── Mention menu state ───────────────────────────────────────────────────────
+  const [mentionOpen, setMentionOpen] = useState(false)
+  // caret position of the triggering "@" character
+  const mentionAtPosRef = useRef<number>(-1)
+  const [mentionQuery, setMentionQuery] = useState('')
+  const [mentionIndex, setMentionIndex] = useState(0)
 
   // ── Typing indicators ────────────────────────────────────────────────────────
   // Map from userId → { label: display label, isAgent: true when agentLabel was set, timerId }
@@ -120,12 +136,14 @@ export function SessionView({ session, onBack }: Props) {
         break
       case 'typing':
         if (event.payload.branchId !== activeBranchId) break
-        if (event.payload.userId === user?.id) break
         {
-          const { userId, agentLabel } = event.payload as { userId: string; branchId: string; agentLabel?: string }
+          const { userId, agentLabel } = event.payload
+          // Skip our own typing, but still show our own agent (e.g. Claude) working.
+          if (userId === user?.id && !agentLabel) break
+          const key = agentLabel ? `${userId}:${agentLabel}` : userId
           setTypingUsers((prev) => {
-            // Cancel existing expiry timer for this user if any
-            const existing = prev.get(userId)
+            // Cancel existing expiry timer for this typer if any
+            const existing = prev.get(key)
             if (existing) clearTimeout(existing.timerId)
             const member = members.find((m) => m.id === userId)
             const isAgent = agentLabel != null
@@ -133,12 +151,12 @@ export function SessionView({ session, onBack }: Props) {
             const timerId = setTimeout(() => {
               setTypingUsers((cur) => {
                 const next = new Map(cur)
-                next.delete(userId)
+                next.delete(key)
                 return next
               })
             }, 5000)
             const next = new Map(prev)
-            next.set(userId, { label, isAgent, timerId })
+            next.set(key, { label, isAgent, timerId })
             return next
           })
         }
@@ -148,6 +166,11 @@ export function SessionView({ session, onBack }: Props) {
 
   const { send: wsSend } = useWebSocket(serverUrl, token, session.id, handleWsEvent)
 
+  // Fetch agents (and refetch on window focus)
+  const fetchAgents = useCallback(() => {
+    api.sessions.agents(session.id).then(setAgents).catch(() => {})
+  }, [session.id])
+
   useEffect(() => {
     api.sessions.branches(session.id).then((data) => {
       setBranches(data)
@@ -155,7 +178,13 @@ export function SessionView({ session, onBack }: Props) {
       if (main) setActiveBranchId(main.id)
     })
     api.sessions.get(session.id).then((data) => setMembers(data.members))
-  }, [session.id])
+    fetchAgents()
+  }, [session.id, fetchAgents])
+
+  useEffect(() => {
+    window.addEventListener('focus', fetchAgents)
+    return () => window.removeEventListener('focus', fetchAgents)
+  }, [fetchAgents])
 
   useEffect(() => {
     if (!activeBranchId) return
@@ -202,9 +231,60 @@ export function SessionView({ session, onBack }: Props) {
     return `${labels[0]}, ${labels[1]} and ${labels.length - 2} more are typing…`
   }, [typingUsers])
 
+  // ── Mention helpers ──────────────────────────────────────────────────────────
+  const mentionItems = useMemo(() => buildMentionItems(members, agents), [members, agents])
+
+  // Set of lowercase labels for highlight matching
+  const mentionLabelSet = useMemo(
+    () => new Set(mentionItems.map((m) => m.label.toLowerCase())),
+    [mentionItems],
+  )
+
+  function insertMention(label: string) {
+    const atPos = mentionAtPosRef.current
+    if (atPos < 0) return
+    // Replace from "@" up to (but not including) whatever follows the current query
+    const before = composerText.slice(0, atPos)
+    const afterQuery = composerText.slice(atPos + 1 + mentionQuery.length)
+    const next = `${before}@${label} ${afterQuery}`
+    setComposerText(next)
+    setMentionOpen(false)
+    mentionAtPosRef.current = -1
+    // Restore focus and move caret to just after the inserted mention
+    const newCaret = atPos + label.length + 2 // "@" + label + " "
+    requestAnimationFrame(() => {
+      const el = composerRef.current
+      if (el) {
+        el.focus()
+        el.setSelectionRange(newCaret, newCaret)
+      }
+    })
+  }
+
   // Outgoing typing frame — throttled to at most once every 3 s
   function handleComposerChange(e: React.ChangeEvent<HTMLInputElement>) {
-    setComposerText(e.target.value)
+    const value = e.target.value
+    setComposerText(value)
+
+    // Mention trigger: find the "@" the caret is currently inside
+    const caret = e.target.selectionStart ?? value.length
+    // Walk back from caret to find an unbroken "@word" segment
+    let atPos = -1
+    for (let i = caret - 1; i >= 0; i--) {
+      if (value[i] === '@') { atPos = i; break }
+      if (value[i] === ' ') break
+    }
+    if (atPos >= 0) {
+      const query = value.slice(atPos + 1, caret)
+      mentionAtPosRef.current = atPos
+      setMentionQuery(query)
+      setMentionIndex(0)
+      setMentionOpen(true)
+    } else {
+      setMentionOpen(false)
+      mentionAtPosRef.current = -1
+    }
+
     if (!activeBranchId) return
     const now = Date.now()
     if (now - lastTypingSentRef.current >= 3000) {
@@ -213,16 +293,40 @@ export function SessionView({ session, onBack }: Props) {
     }
   }
 
+  function handleComposerKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (!mentionOpen) return
+    const filtered = mentionItems.filter((item) =>
+      item.label.toLowerCase().startsWith(mentionQuery.toLowerCase()),
+    )
+    if (filtered.length === 0) return
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setMentionIndex((i) => (i + 1) % filtered.length)
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setMentionIndex((i) => (i - 1 + filtered.length) % filtered.length)
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault()
+      const item = filtered[mentionIndex]
+      if (item) insertMention(item.label)
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      setMentionOpen(false)
+    }
+  }
+
   async function handleSend(e: React.FormEvent) {
     e.preventDefault()
     if (!composerText.trim() || !activeBranchId || sending) return
     const text = composerText.trim()
     setComposerText('')
+    setSendError(null)
     setSending(true)
     try {
       await api.messages.post(activeBranchId, text, true)
     } catch (err: any) {
       setComposerText(text)
+      setSendError(err?.message ?? 'Failed to send message')
     } finally {
       setSending(false)
     }
@@ -231,6 +335,7 @@ export function SessionView({ session, onBack }: Props) {
   async function handleBranch(e: React.FormEvent) {
     e.preventDefault()
     if (!branchingFromMsg) return
+    setBranchError(null)
     try {
       const branch = await api.branches.create(session.id, branchingFromMsg.id, branchModel, branchName || undefined)
       setBranches((prev) => [...prev, branch])
@@ -238,41 +343,105 @@ export function SessionView({ session, onBack }: Props) {
       setBranchingFromMsg(null)
       setBranchName('')
     } catch (err: any) {
-      console.error('Branch creation failed', err)
+      setBranchError(err?.message ?? 'Failed to create branch')
     }
   }
+
+  // Derive the set of branch IDs that already have a share card posted in any branch
+  const sharedBranchIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const msgs of allMessages.values()) {
+      for (const m of msgs) {
+        if (m.sharedFromBranchId) ids.add(m.sharedFromBranchId)
+      }
+    }
+    return ids
+  }, [allMessages])
 
   const canPost = activeBranch
     ? activeBranch.isMain || activeBranch.ownerId === user?.id
     : false
+
+  // "Share to main" — only shown for non-main branches owned by the current user
+  const canShare = activeBranch
+    ? !activeBranch.isMain && activeBranch.ownerId === user?.id
+    : false
+
+  async function handleShare() {
+    if (!activeBranchId || sharingBranchId) return
+    setSharingBranchId(activeBranchId)
+    setShareConfirm(false)
+    setShareError(null)
+    try {
+      await api.branches.share(activeBranchId)
+      setShareConfirm(true)
+      setTimeout(() => setShareConfirm(false), 4000)
+    } catch (err: any) {
+      setShareError(err?.message ?? 'Share failed')
+      setTimeout(() => setShareError(null), 5000)
+    } finally {
+      setSharingBranchId(null)
+    }
+  }
 
   return (
     <div className="flex h-screen flex-col" data-testid="session-view">
       {/* Top bar */}
       <div className="flex items-center gap-3 border-b border-gray-800 px-4 py-2.5 shrink-0">
         <button onClick={onBack} className="text-xs text-gray-500 hover:text-gray-300">← Back</button>
-        <span className="font-semibold">{session.title}</span>
-        <span className="ml-auto text-xs text-gray-500">
-          {onlineUsers.size > 0 ? `${onlineUsers.size} online` : ''}
+        <span className="font-semibold truncate">{session.title}</span>
+        <span className="ml-auto flex items-center gap-3">
+          {canShare && (
+            <span className="flex items-center gap-2">
+              {shareError && <span className="text-xs text-red-400">{shareError}</span>}
+              {shareConfirm && <span className="text-xs text-green-400">Shared ✓</span>}
+              <button
+                onClick={handleShare}
+                disabled={sharingBranchId !== null}
+                className="text-xs rounded-lg bg-gray-700 px-3 py-1 hover:bg-gray-600 disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {sharingBranchId ? (
+                  <><span className="h-3 w-3 rounded-full border-2 border-gray-400 border-t-transparent animate-spin" />Sharing…</>
+                ) : 'Share to main'}
+              </button>
+            </span>
+          )}
+          <span className="text-xs text-gray-500">
+            {onlineUsers.size > 0 ? `${onlineUsers.size} online` : ''}
+          </span>
         </span>
       </div>
 
       <div className="flex flex-1 overflow-hidden">
         {/* Left sidebar — members + branch list */}
         <div className="w-56 shrink-0 border-r border-gray-800 flex flex-col overflow-hidden">
-          <div className="px-3 py-2 border-b border-gray-800">
+          {/* Invite link */}
+          <div className="px-3 py-1.5 border-b border-gray-800 flex items-center justify-between">
+            <span className="text-[10px] text-gray-600 uppercase tracking-wide font-semibold">Invite</span>
+            <button
+              onClick={() => window.tandem.writeText(`tandem://join/${session.inviteCode}`)}
+              className="text-[10px] text-gray-400 hover:text-gray-200 rounded px-1.5 py-0.5 hover:bg-gray-800"
+            >
+              Copy link
+            </button>
+          </div>
+
+          {/* Members — capped height so long lists don't push branches off screen */}
+          <div className="px-3 py-2 border-b border-gray-800 max-h-36 overflow-y-auto">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Members</p>
             <ul className="space-y-0.5">
               {members.map((m) => (
                 <li key={m.id} className="flex items-center gap-1.5 text-xs py-0.5">
-                  <span className={`h-1.5 w-1.5 rounded-full ${onlineUsers.has(m.id) ? 'bg-green-400' : 'bg-gray-600'}`} />
+                  <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${onlineUsers.has(m.id) ? 'bg-green-400' : 'bg-gray-600'}`} />
                   <span className="truncate">{m.displayName}</span>
-                  {m.kind === 'agent' && <span className="text-gray-500 text-[10px]">agent</span>}
+                  {m.kind === 'agent' && <span className="text-gray-500 text-[10px] shrink-0">agent</span>}
                 </li>
               ))}
             </ul>
           </div>
-          <div className="flex-1 overflow-y-auto px-2 py-2">
+
+          {/* Branches */}
+          <div className="flex-1 overflow-y-auto px-2 py-2 min-h-0">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1 px-1">Branches</p>
             <ul className="space-y-0.5">
               {branches.map((b) => (
@@ -281,7 +450,7 @@ export function SessionView({ session, onBack }: Props) {
                     onClick={() => setActiveBranchId(b.id)}
                     className={`w-full text-left rounded-lg px-2 py-1.5 text-xs ${activeBranchId === b.id ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800'}`}
                   >
-                    <div className="font-medium">{b.name}</div>
+                    <div className="font-medium truncate">{b.name}</div>
                     <div className="text-gray-500 truncate">{b.model.split('/').pop()}</div>
                     {b.ownerId === user?.id && !b.isMain && (
                       <span className="text-blue-400 text-[10px]">yours</span>
@@ -291,6 +460,22 @@ export function SessionView({ session, onBack }: Props) {
               ))}
             </ul>
           </div>
+
+          {/* Agents empty-state nudge */}
+          {agents.length === 0 && (
+            <div className="px-3 py-2 border-t border-gray-800 shrink-0">
+              <p className="text-[10px] text-gray-600 leading-snug">
+                No agents connected.{' '}
+                <button
+                  onClick={onBack}
+                  className="text-gray-500 underline hover:text-gray-300"
+                  title="Go back to Home then open Settings"
+                >
+                  Connect one in Settings →
+                </button>
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Center — message list + composer */}
@@ -308,7 +493,10 @@ export function SessionView({ session, onBack }: Props) {
                 msg={msg}
                 currentUserId={user?.id}
                 members={members}
+                branches={branches}
+                mentionLabelSet={mentionLabelSet}
                 onBranchFrom={() => setBranchingFromMsg(msg)}
+                onOpenBranch={setActiveBranchId}
               />
             ))}
             <div ref={messagesEndRef} />
@@ -317,16 +505,22 @@ export function SessionView({ session, onBack }: Props) {
           {/* Branch-from dialog */}
           {branchingFromMsg && (
             <form onSubmit={handleBranch} className="border-t border-gray-800 px-4 py-3 space-y-2 bg-gray-900 shrink-0">
-              <p className="text-xs text-gray-400">
-                Branching from: <span className="text-white">{branchingFromMsg.content.slice(0, 60)}…</span>
+              <p className="text-xs text-gray-400 truncate">
+                Branching from: <span className="text-white">{branchingFromMsg.content.slice(0, 60)}{branchingFromMsg.content.length > 60 ? '…' : ''}</span>
               </p>
-              <div className="flex gap-2">
+              {branchError && (
+                <p className="text-xs text-red-400 flex items-center justify-between">
+                  <span>{branchError}</span>
+                  <button type="button" onClick={() => setBranchError(null)} className="ml-2 text-red-300 hover:text-red-200">✕</button>
+                </p>
+              )}
+              <div className="flex flex-wrap gap-2">
                 <input
                   type="text"
                   placeholder="Branch name (optional)"
                   value={branchName}
                   onChange={(e) => setBranchName(e.target.value)}
-                  className="flex-1 rounded-lg bg-gray-800 px-3 py-1.5 text-xs outline-none ring-1 ring-gray-600 focus:ring-blue-500"
+                  className="flex-1 min-w-0 rounded-lg bg-gray-800 px-3 py-1.5 text-xs outline-none ring-1 ring-gray-600 focus:ring-blue-500"
                 />
                 <select
                   value={branchModel}
@@ -338,7 +532,7 @@ export function SessionView({ session, onBack }: Props) {
                   ))}
                 </select>
                 <button type="submit" className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs hover:bg-blue-700">Branch</button>
-                <button type="button" onClick={() => setBranchingFromMsg(null)} className="rounded-lg bg-gray-700 px-3 py-1.5 text-xs hover:bg-gray-600">Cancel</button>
+                <button type="button" onClick={() => { setBranchingFromMsg(null); setBranchError(null) }} className="rounded-lg bg-gray-700 px-3 py-1.5 text-xs hover:bg-gray-600">Cancel</button>
               </div>
             </form>
           )}
@@ -348,16 +542,37 @@ export function SessionView({ session, onBack }: Props) {
             <div className="px-4 pb-1 text-xs text-gray-500 italic shrink-0">{typingText}</div>
           )}
 
+          {/* Send error */}
+          {sendError && !branchingFromMsg && (
+            <div className="px-4 pb-1 shrink-0 flex items-center justify-between">
+              <p className="text-xs text-red-400">{sendError}</p>
+              <button onClick={() => setSendError(null)} className="ml-2 text-xs text-red-300 hover:text-red-200">✕</button>
+            </div>
+          )}
+
           {/* Composer */}
           {!branchingFromMsg && (
-            <form onSubmit={handleSend} className="border-t border-gray-800 px-4 py-3 flex gap-2 shrink-0">
+            <form onSubmit={handleSend} className="relative border-t border-gray-800 px-4 py-3 flex gap-2 shrink-0">
+              {/* Mention menu — anchored above the input */}
+              {mentionOpen && canPost && (
+                <MentionMenu
+                  items={mentionItems}
+                  query={mentionQuery}
+                  activeIndex={mentionIndex}
+                  onSelect={insertMention}
+                  onActiveIndexChange={setMentionIndex}
+                  onClose={() => setMentionOpen(false)}
+                />
+              )}
               {canPost ? (
                 <>
                   <input
+                    ref={composerRef}
                     type="text"
                     value={composerText}
                     onChange={handleComposerChange}
-                    placeholder="Message…"
+                    onKeyDown={handleComposerKeyDown}
+                    placeholder="Message… (type @ to mention)"
                     disabled={sending}
                     className="flex-1 rounded-lg bg-gray-800 px-3 py-2 text-sm outline-none ring-1 ring-gray-700 focus:ring-blue-500 disabled:opacity-50"
                   />
@@ -393,6 +608,7 @@ export function SessionView({ session, onBack }: Props) {
             branches={branches}
             allMessages={allMessages}
             activeBranchId={activeBranchId}
+            sharedBranchIds={sharedBranchIds}
             onSelectBranch={setActiveBranchId}
           />
         </div>
@@ -402,18 +618,46 @@ export function SessionView({ session, onBack }: Props) {
 }
 
 function MessageRow({
-  msg, currentUserId, members, onBranchFrom,
+  msg, currentUserId, members, branches, mentionLabelSet, onBranchFrom, onOpenBranch,
 }: {
   msg: Message
   currentUserId?: string
+  branches: Branch[]
   members: User[]
+  mentionLabelSet: Set<string>
   onBranchFrom: () => void
+  onOpenBranch: (branchId: string) => void
 }) {
   const [hovered, setHovered] = useState(false)
   const author = members.find((m) => m.id === msg.authorId)
-  const isMe = msg.authorId === currentUserId
   const isAssistant = msg.authorType === 'assistant'
   const isAgent = msg.authorType === 'agent'
+  // An agent posts as its token's owner, but its messages are not "mine".
+  const isMe = msg.authorId === currentUserId && !isAgent
+
+  // ── Summary card for shared-branch messages ──────────────────────────────────
+  if (msg.sharedFromBranchId) {
+    const sourceBranch = branches.find((b) => b.id === msg.sharedFromBranchId)
+    return (
+      <div className="rounded-xl border border-blue-900/60 bg-blue-950/30 px-4 py-3 space-y-1.5">
+        <div className="flex items-center gap-2 text-xs text-blue-400 font-medium">
+          <span>↗</span>
+          <span>Summary from branch: {sourceBranch?.name ?? msg.sharedFromBranchId}</span>
+        </div>
+        <p className="text-sm text-gray-200 whitespace-pre-wrap break-words">
+          {highlightMentions(msg.content, mentionLabelSet)}
+        </p>
+        {sourceBranch && (
+          <button
+            onClick={() => onOpenBranch(sourceBranch.id)}
+            className="text-xs text-blue-400 hover:text-blue-300"
+          >
+            Open branch →
+          </button>
+        )}
+      </div>
+    )
+  }
 
   // Avatar circle style
   const avatarClass = isAssistant
@@ -494,7 +738,9 @@ function MessageRow({
         <div className={`px-3 py-2 text-sm whitespace-pre-wrap break-words ${bubbleClass}${
           msg.status === 'error' ? ' !bg-red-900/40 text-red-300' : ''
         }`}>
-          {msg.content || (msg.status === 'pending' ? '…' : '')}
+          {msg.content
+            ? highlightMentions(msg.content, mentionLabelSet)
+            : (msg.status === 'pending' ? '…' : '')}
           {msg.status === 'streaming' && <span className="ml-1 animate-pulse">▋</span>}
         </div>
       </div>
