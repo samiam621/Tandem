@@ -132,7 +132,7 @@ Messages form a **tree**. Each message stores `parent_id`, the message before it
 | `tools` | id, session_id, owner_id, name, description, input_schema, executor_kind, config_ref?, enabled, created_at |
 | `agent_tools` | agent_id, tool_id — PK (agent_id, tool_id) |
 | `branch_agents` | branch_id, agent_id, position, is_default — PK (branch_id, agent_id); at most one default per branch |
-| `messages` | id, session_id, branch_id, parent_id?, author_type (`user` \| `assistant` \| `agent` \| `tool`), author_id, agent_label? (MCP token label at post time), agent_id?, run_id?, tool_call_id?, kind (`text` \| `tool_call` \| `tool_result`), model?, content, status (`pending` \| `streaming` \| `done` \| `error`), created_at |
+| `messages` | id, session_id, branch_id, parent_id?, author_type (`user` \| `assistant` \| `agent` \| `tool`), author_id, agent_label? (MCP token label at post time), shared_from_branch_id? (Share to main summary), agent_id?, run_id?, tool_call_id?, kind (`text` \| `tool_call` \| `tool_result`), model?, content, status (`pending` \| `streaming` \| `done` \| `error`), created_at |
 | `message_mentions` | message_id, token_id, created_at — the agent token mentioned as `@label`, resolved when the message is accepted. *Hackathon: agents are MCP tokens; agent_id replaces token_id once first-class agents exist.* |
 | `runs` | id, session_id, branch_id, trigger_message_id, context_head_message_id, agent_id, agent_config_snapshot, initiated_by, parent_run_id?, status (`queued` \| `running` \| `waiting_tool` \| `cancel_requested` \| `succeeded` \| `failed` \| `cancelled`), attempt, lease_owner?, lease_expires_at?, heartbeat_at?, hop_count, token_budget, token_usage, error?, created_at, started_at?, finished_at? |
 | `run_steps` | id, run_id, sequence, kind (`model` \| `tool` \| `handoff`), status, request_metadata, result_metadata?, token_usage?, started_at?, finished_at? |
@@ -266,6 +266,7 @@ The MCP server uses `@modelcontextprotocol/sdk` with the Streamable HTTP transpo
 | `list_models` | — | model IDs and names |
 | `wait_for_mentions` | since?, timeoutSeconds = 25 (max 50) | `{ mentions, cursor }`: @mentions of this agent token after `since` in the user's sessions; waits until one arrives or the timeout passes. Agents loop, passing `cursor` back as `since`. |
 | `get_branch_context` | branchId, limit = 200 | session, branch with owner, `forkedFrom`, the root-to-head path (including history inherited from the fork), and the session's other branches |
+| `share_to_main` | branchId | branch owner only: posts an AI summary of the branch's own messages into main, linked by `shared_from_branch_id`; returns that message |
 | `set_working` | branchId, working = true | re-sends a `typing` event with the agent's label every 3 s ("Claude is working…") until the agent posts on that branch, turns it off, or 5 min pass |
 
 Each tool description says **when** an agent should use it. Example for `read_branch`: *"Read the conversation in a branch of a multiplayer chat session. Use this to catch up on what your team discussed before acting."*

@@ -30,7 +30,7 @@ function buildTestDb() {
     CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, owner_id TEXT NOT NULL, default_model TEXT NOT NULL, invite_code TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
     CREATE TABLE session_members (session_id TEXT NOT NULL, user_id TEXT NOT NULL, joined_at TEXT NOT NULL, last_seen_at TEXT NOT NULL);
     CREATE TABLE branches (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, owner_id TEXT, is_main INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL, model TEXT NOT NULL, fork_message_id TEXT, head_message_id TEXT, created_at TEXT NOT NULL);
-    CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, branch_id TEXT NOT NULL, parent_id TEXT, author_type TEXT NOT NULL, author_id TEXT NOT NULL, agent_label TEXT, model TEXT, content TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL);
+    CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, branch_id TEXT NOT NULL, parent_id TEXT, author_type TEXT NOT NULL, author_id TEXT NOT NULL, agent_label TEXT, shared_from_branch_id TEXT, model TEXT, content TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL);
     CREATE TABLE message_mentions (message_id TEXT NOT NULL, token_id TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE api_tokens (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, kind TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, label TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT);
   `)
@@ -63,6 +63,8 @@ describe('REST integration', () => {
   let sessionId: string
   let mainBranchId: string
   let claudeToken: string
+  let user2Token: string
+  let bugfixBranchId: string
 
   beforeAll(async () => {
     app = await buildApp()
@@ -160,6 +162,7 @@ describe('REST integration', () => {
       payload: { displayName: 'User2', deviceId: 'device-2' },
     })
     const token2 = auth2.json().token
+    user2Token = token2
 
     // Get invite code
     const sessRes = await app.inject({
@@ -266,6 +269,7 @@ describe('REST integration', () => {
       method: 'POST', url: `/api/sessions/${sessionId}/branches`, headers: auth,
       payload: { fromMessageId: forkMsg.id, model: 'test-model', name: 'bugfix' },
     })).json()
+    bugfixBranchId = branch.id
     await app.inject({
       method: 'POST', url: `/api/branches/${branch.id}/messages`, headers: auth,
       payload: { content: 'branch work', triggerAi: false },
@@ -278,6 +282,37 @@ describe('REST integration', () => {
     expect(ctx.branch).toMatchObject({ name: 'bugfix', ownerDisplayName: 'TestUser' })
     expect(ctx.otherBranches.map((b) => b.name)).toContain('main')
     expect(await getBranchContext(claude, 'no-such-branch', 200)).toBeNull()
+  })
+
+  it('POST /api/branches/:id/share posts a summary into main (owner only)', async () => {
+    const share = (branchId: string, tok: string) =>
+      app.inject({ method: 'POST', url: `/api/branches/${branchId}/share`, headers: { authorization: `Bearer ${tok}` } })
+
+    expect((await share(bugfixBranchId, user2Token)).statusCode).toBe(403)
+    expect((await share(mainBranchId, token)).statusCode).toBe(400)
+    expect((await share('no-such-branch', token)).statusCode).toBe(404)
+
+    const res = await share(bugfixBranchId, token)
+    expect(res.statusCode).toBe(201)
+    const summary = res.json()
+    expect(summary).toMatchObject({ branchId: mainBranchId, authorType: 'assistant', sharedFromBranchId: bugfixBranchId, status: 'done' })
+    expect(summary.content).toContain('Dev mode') // no OpenRouter key in tests
+
+    const mainMsgs = (await app.inject({
+      method: 'GET', url: `/api/branches/${mainBranchId}/messages`, headers: { authorization: `Bearer ${token}` },
+    })).json()
+    expect(mainMsgs.at(-1).id).toBe(summary.id) // summary is the new head of main
+  })
+
+  it('share refuses a branch with no messages of its own', async () => {
+    const auth = { authorization: `Bearer ${token}` }
+    const mainMsgs = (await app.inject({ method: 'GET', url: `/api/branches/${mainBranchId}/messages`, headers: auth })).json()
+    const empty = (await app.inject({
+      method: 'POST', url: `/api/sessions/${sessionId}/branches`, headers: auth,
+      payload: { fromMessageId: mainMsgs[0].id, model: 'test-model', name: 'empty' },
+    })).json()
+    const res = await app.inject({ method: 'POST', url: `/api/branches/${empty.id}/share`, headers: auth })
+    expect(res.statusCode).toBe(400)
   })
 
   it('setWorking announces "<label> is working" until the agent posts', async () => {

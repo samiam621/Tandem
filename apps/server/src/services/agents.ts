@@ -91,6 +91,7 @@ export async function getBranchContext(actor: Actor, branchId: string, limit: nu
       authorType: m.authorType,
       authorDisplayName: m.authorType === 'assistant' ? 'Tandem AI' : m.agentLabel ?? nameById.get(m.authorId) ?? m.authorId,
       agentLabel: m.agentLabel ?? null,
+      sharedFromBranchId: m.sharedFromBranchId ?? null,
       model: m.model,
       content: m.content,
       status: m.status,

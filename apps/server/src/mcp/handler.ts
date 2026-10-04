@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { resolveToken } from '../services/auth.js'
 import type { Actor } from '../services/auth.js'
 import { listSessions, getSession, getSessionBranches } from '../services/sessions.js'
-import { getBranchMessages, postMessage } from '../services/messages.js'
+import { getBranchMessages, postMessage, shareBranch } from '../services/messages.js'
 import { createBranch } from '../services/branches.js'
 import { waitForMentions, getBranchContext, setWorking } from '../services/agents.js'
 import { eq } from 'drizzle-orm'
@@ -131,6 +131,20 @@ function buildMcpServer(actor: Actor) {
     async ({ branchId, working }) => {
       const ok = setWorking(actor, branchId, working)
       return { content: [{ type: 'text' as const, text: JSON.stringify(ok ? { ok: true } : { error: 'not_found' }) }] }
+    },
+  )
+
+  // ─── share_to_main ────────────────────────────────────────────────────────
+  server.tool(
+    'share_to_main',
+    "Post an AI summary of a branch's work (everything since it split from main) into the main thread, so the whole team is on the same page. Use it when work on a branch reaches a result worth sharing. Only works on branches owned by your token's user.",
+    { branchId: z.string().describe('The branch ID to summarize') },
+    async ({ branchId }) => {
+      try {
+        return { content: [{ type: 'text' as const, text: JSON.stringify(await shareBranch(actor, branchId)) }] }
+      } catch (err: unknown) {
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }] }
+      }
     },
   )
 

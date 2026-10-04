@@ -1,0 +1,1 @@
+ALTER TABLE `messages` ADD `shared_from_branch_id` text;

@@ -222,6 +222,7 @@ export interface McpMention {
 export interface McpContextMessage extends McpMessageRow {
   branchId: string
   agentLabel: string | null
+  sharedFromBranchId: string | null // set on a Share to main summary
 }
 
 export interface McpBranchContext {

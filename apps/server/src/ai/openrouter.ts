@@ -42,6 +42,25 @@ function buildContext(sessionId: string, headMessageId: string) {
   })
 }
 
+// ─── Summarize (Share to main) ────────────────────────────────────────────────
+
+const SUMMARY_PROMPT = `You summarize a side branch of a team chat so teammates in the main thread can catch up.
+Write a short markdown summary: what was worked on, decisions and results, and open questions.
+Use bullet points and stay under 150 words. Do not invent details that are not in the transcript.`
+
+// One-shot (non-streaming) summary of a transcript, using the branch's model.
+export async function summarize(model: string, transcript: string): Promise<string> {
+  const apiKey = process.env.OPENROUTER_API_KEY
+  if (!apiKey) return `[Dev mode: no OPENROUTER_API_KEY set. Model: ${model}. Summary of ${transcript.split('\n').length} messages would appear here.]`
+
+  const client = new OpenAI({ apiKey, baseURL: 'https://openrouter.ai/api/v1', defaultHeaders: { 'X-Title': 'Tandem' } })
+  const res = await client.chat.completions.create({
+    model,
+    messages: [{ role: 'system', content: SUMMARY_PROMPT }, { role: 'user', content: transcript }],
+  })
+  return res.choices[0]?.message?.content?.trim() || '(The model returned an empty summary.)'
+}
+
 // ─── Generate reply ───────────────────────────────────────────────────────────
 
 export async function generateReply(branchId: string, pendingMsgId: string, sessionId: string) {
