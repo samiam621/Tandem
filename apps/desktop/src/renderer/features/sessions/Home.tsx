@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import type { Session } from '@tandem/shared'
-import { api } from './api'
-import { useAuth } from './AuthContext'
+import { api } from '../../lib/api'
+import { useAuth } from '../../app/AuthContext'
 
 interface Props {
   onOpenSession: (session: Session) => void

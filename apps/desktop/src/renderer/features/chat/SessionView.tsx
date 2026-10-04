@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react'
 import type { Session, Branch, Message, User } from '@tandem/shared'
-import { api } from './api'
-import { useAuth } from './AuthContext'
-import { useWebSocket } from './useWebSocket'
+import { api } from '../../lib/api'
+import { useAuth } from '../../app/AuthContext'
+import { useWebSocket } from '../../lib/useWebSocket'
 
 interface Props {
   session: Session

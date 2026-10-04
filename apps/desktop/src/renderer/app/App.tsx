@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react'
 import { AuthProvider, useAuth } from './AuthContext'
-import { SignIn } from './SignIn'
-import { Home } from './Home'
-import { SessionView } from './SessionView'
-import { Settings } from './Settings'
+import { SignIn } from '../features/auth/SignIn'
+import { Home } from '../features/sessions/Home'
+import { SessionView } from '../features/chat/SessionView'
+import { Settings } from '../features/settings/Settings'
 import type { Session } from '@tandem/shared'
 
 function Inner() {
