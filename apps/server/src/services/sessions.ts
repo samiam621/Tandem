@@ -217,3 +217,11 @@ export async function listSessionAgents(
     active: token.lastUsedAt !== null && Date.now() - Date.parse(token.lastUsedAt) < ACTIVE_MS,
   }))
 }
+
+// ─── Membership ───────────────────────────────────────────────────────────────
+
+export function isSessionMember(sessionId: string, userId: string): boolean {
+  return Boolean(getDb().select().from(sessionMembers)
+    .where(and(eq(sessionMembers.sessionId, sessionId), eq(sessionMembers.userId, userId)))
+    .get())
+}

@@ -79,6 +79,8 @@ export const api = {
       }),
     branches: (id: string) =>
       request<import('@tandem/shared').Branch[]>(`/api/sessions/${id}/branches`),
+    agents: (id: string) =>
+      request<import('@tandem/shared').SessionAgent[]>(`/api/sessions/${id}/agents`),
   },
 
   models: {
@@ -105,6 +107,10 @@ export const api = {
       request<import('@tandem/shared').Branch>(`/api/sessions/${sessionId}/branches`, {
         method: 'POST',
         body: JSON.stringify({ fromMessageId, model, name }),
+      }),
+    share: (branchId: string) =>
+      request<import('@tandem/shared').Message>(`/api/branches/${branchId}/share`, {
+        method: 'POST',
       }),
   },
 

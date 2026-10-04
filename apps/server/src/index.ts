@@ -13,6 +13,13 @@ import { wsHandler } from './ws/handler.js'
 import { tokenRoutes } from './routes/tokens.js'
 import { mcpHandler } from './mcp/handler.js'
 
+// A deployed server (non-localhost PUBLIC_URL) must not hash tokens with the known dev secret.
+const publicUrl = process.env.PUBLIC_URL ?? ''
+if (!process.env.TOKEN_SECRET && publicUrl && !/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(publicUrl)) {
+  console.error(`TOKEN_SECRET must be set when PUBLIC_URL is ${publicUrl}`)
+  process.exit(1)
+}
+
 const server = Fastify({ logger: true })
 
 await server.register(cors, {

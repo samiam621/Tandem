@@ -6,6 +6,8 @@ interface Props {
   /** All fetched messages keyed by branchId */
   allMessages: Map<string, Message[]>
   activeBranchId: string | null
+  /** Branch IDs that have already had a summary shared to main */
+  sharedBranchIds: Set<string>
   onSelectBranch: (branchId: string) => void
 }
 
@@ -54,15 +56,11 @@ function buildTree(
     .filter((b) => !b.isMain)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
 
+  // Fetched lists are full root-to-head paths; the fork message's own branchId is the parent branch.
+  const allFetched = [...allMessages.values()].flat()
   for (const b of nonMain) {
-    // Find the branch whose messages contain this branch's forkMessageId
-    const parentBranch = b.forkMessageId
-      ? branches.find((pb) => {
-          const msgs = allMessages.get(pb.id) ?? []
-          return msgs.some((m) => m.id === b.forkMessageId)
-        })
-      : mainBranch
-    const parentDepth = branchDepth.get(parentBranch?.id ?? mainBranch.id) ?? 0
+    const forkMsg = allFetched.find((m) => m.id === b.forkMessageId)
+    const parentDepth = branchDepth.get(forkMsg?.branchId ?? mainBranch.id) ?? 0
     branchDepth.set(b.id, parentDepth + 1)
   }
 
@@ -71,7 +69,8 @@ function buildTree(
   let row = 0
 
   function addBranchNodes(branch: Branch, depth: number, parentForkNodeId: string | null) {
-    const msgs = allMessages.get(branch.id) ?? []
+    // Only the branch's own messages: inherited history is drawn on its parent branch.
+    const msgs = (allMessages.get(branch.id) ?? []).filter((m) => m.branchId === branch.id)
     const x = PAD_X + depth * COL_W
 
     // If this branch has no messages yet, draw a placeholder node
@@ -152,7 +151,7 @@ function buildTree(
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function MessageTreePanel({ branches, allMessages, activeBranchId, onSelectBranch }: Props) {
+export function MessageTreePanel({ branches, allMessages, activeBranchId, sharedBranchIds, onSelectBranch }: Props) {
   const { nodes, svgH, svgW } = useMemo(
     () => buildTree(branches, allMessages, activeBranchId),
     [branches, allMessages, activeBranchId],
@@ -203,6 +202,7 @@ export function MessageTreePanel({ branches, allMessages, activeBranchId, onSele
           {/* Nodes */}
           {nodes.map((node) => {
             const isActive = node.branchId === activeBranchId
+            const isShared = sharedBranchIds.has(node.branchId)
             const circleColor = isActive
               ? '#3b82f6'
               : node.isForkPoint
@@ -232,6 +232,16 @@ export function MessageTreePanel({ branches, allMessages, activeBranchId, onSele
                 >
                   {node.label}
                 </text>
+                {/* Shared indicator — small dot above the circle */}
+                {isShared && (
+                  <circle
+                    cx={node.x + R - 1}
+                    cy={node.y - R + 1}
+                    r={2.5}
+                    fill="#60a5fa"
+                    aria-label="shared to main"
+                  />
+                )}
               </g>
             )
           })}

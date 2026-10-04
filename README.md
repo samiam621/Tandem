@@ -77,13 +77,31 @@ The desktop app's server URL defaults to the hosted server. You can change it in
 npm test
 ```
 
-Unit tests cover context building from the message tree, permission checks, presence counting, and the one-time code exchange. Integration tests cover the main REST endpoints.
+Unit tests cover context building from the message tree, permission checks, presence counting, the one-time code exchange, and @mention matching. Integration tests cover the main REST endpoints and the agent services behind the MCP tools: mentions (including that outsiders never see them), branch context, the working indicator, and Share to main.
+
+To check a running server end to end (REST, live WebSocket events, the MCP tools Claude uses, Share to main, and that non-members get no live events), run the script below against it. Use `http://localhost:3000` for your local server. It creates two guests and a session there. Needs Node 22+.
+
+```bash
+node apps/server/scripts/e2e.mjs https://tandem-server-hdmw.onrender.com
+```
 
 ### Deploy the server
 
-Deploy `apps/server` to Render, Railway, or Fly.io. The host needs to support WebSockets. Set the environment variables above and run migrations on deploy.
+Deploy `apps/server` to Render, Railway, or Fly.io. The host needs to support WebSockets. Migrations run automatically when the server starts.
 
 **Run exactly one instance.** Presence and the AI reply queues are kept in memory.
+
+**Current deployment (hackathon):** Render web service `tandem-server` at `https://tandem-server-hdmw.onrender.com`, deployed from `samTest` with auto-deploy off (deploy manually from the Render dashboard).
+
+| Setting | Value |
+|---|---|
+| Build command | `npm ci && npm run build -w packages/shared` |
+| Start command | `cd apps/server && npx tsx src/index.ts` |
+| Env | `TOKEN_SECRET` (random 32-byte hex; the server refuses to start without it when `PUBLIC_URL` is not localhost), `PUBLIC_URL`, `DATABASE_URL=file:./tandem.db`, `NODE_VERSION=22`, `ELECTRON_SKIP_BINARY_DOWNLOAD=1`, and `OPENROUTER_API_KEY` for real AI replies |
+
+On Render's free plan the service sleeps after 15 minutes without traffic, and every restart or deploy **wipes the SQLite database**: users must sign in again and agent tokens must be recreated. For data that survives, use a paid instance with a persistent disk and point `DATABASE_URL` at it (for example `file:/var/data/tandem.db`).
+
+To use it, set **Settings → Server URL** in the desktop app to the public URL.
 
 ---
 
@@ -162,6 +180,16 @@ Some clients name the transport `"http"` instead of `"streamable-http"`.
 
 **Tools:** `list_sessions`, `get_session`, `read_branch`, `post_message`, `create_branch`, `list_models`, `wait_for_mentions`, `get_branch_context`, `set_working`, `share_to_main`. An agent loops on `wait_for_mentions`, reads the branch with `get_branch_context`, calls `set_working`, and replies with `post_message`. Messages an agent posts appear live in the app with an agent label.
 
+**Claude Code as a teammate.** After `claude mcp add`, start `claude` and paste:
+
+```
+You're my teammate "Claude" in Tandem. Loop forever: call wait_for_mentions (pass the
+previous cursor as since). For each mention: get_branch_context for its branch,
+set_working, do what was asked, then post_message your answer to that branch.
+```
+
+Teammates then type `@Claude …` in any branch. The token's label is the name they mention.
+
 ---
 
 ## Project layout
@@ -173,3 +201,22 @@ packages/shared  Shared types and Zod schemas
 ```
 
 For more detail, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
+---
+
+## Contributing: branches and pull requests
+
+Work on a branch, never directly on `main`, and merge through a pull request.
+
+```bash
+git switch main && git pull                 # start from the latest main
+git switch -c my-feature                    # new branch (or: git switch samTest)
+# ...edit, then check:
+npm run typecheck && npm test
+git add <the files you changed>             # not `git add -A`: keeps others' work out
+git commit -m "Short summary of the change"
+git push -u origin my-feature               # first push; afterwards just `git push`
+gh pr create --base main --title "..." --body "..."   # or open the link git prints
+```
+
+Pushing more commits to the same branch updates its open pull request. Merge on GitHub once checks and review pass, then `git switch main && git pull` locally. `.env` and `tandem.db` are ignored by git and must never be committed.
