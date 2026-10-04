@@ -37,7 +37,7 @@ xattr -dr com.apple.quarantine /Applications/Tandem.app
 ## Try it in 3 minutes
 
 1. **Sign in.** Open Tandem, type a display name, and click **Continue as guest**.
-   The first start can take up to a minute while the free server wakes up.
+   The first sign-in can take up to a minute while the free server wakes up (the button shows "Signing in…").
 2. **Start a chat.** Click **+ New**, give the session a title, pick an AI model, and click **Create**. You are in the **main** thread.
 3. **Talk to the AI.** Send a message. The reply streams in, labelled with its model.
 4. **Branch off.** Hover any message and click **Branch from here**. Name the branch and pick a model (it can differ from main). Your branch starts with everything said up to that message, and nothing from other branches. The **Tree** on the right shows how branches split off.

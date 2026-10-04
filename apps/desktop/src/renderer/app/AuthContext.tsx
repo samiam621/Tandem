@@ -31,6 +31,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     ;(async () => {
       try {
+        // No saved token: show sign-in right away instead of waiting on a server that may be
+        // waking up, and start waking it while the user types a name.
+        if (!(await window.tandem.getToken())) {
+          void api.health().catch(() => {})
+          return
+        }
         const u = await api.auth.me()
         setUser(u)
       } catch {
