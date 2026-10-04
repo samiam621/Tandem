@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import type { ApiToken } from '@tandem/shared'
-import { api } from './api'
-import { useAuth } from './AuthContext'
+import { api } from '../../lib/api'
+import { useAuth } from '../../app/AuthContext'
 
 interface Props {
   onClose: () => void
@@ -10,7 +10,7 @@ interface Props {
 export function Settings({ onClose }: Props) {
   const { user, signOut } = useAuth()
   const [tokens, setTokens] = useState<ApiToken[]>([])
-  const [newLabel, setNewLabel] = useState('')
+  const [newLabel, setNewLabel] = useState('Claude')
   const [justCreated, setJustCreated] = useState<{ token: ApiToken; rawToken: string } | null>(null)
   const [serverUrl, setServerUrl] = useState('')
   const [serverUrlDraft, setServerUrlDraft] = useState('')
@@ -48,6 +48,10 @@ export function Settings({ onClose }: Props) {
     e.preventDefault()
     await window.tandem.setServerUrl(serverUrlDraft.trim())
     setServerUrl(serverUrlDraft.trim())
+  }
+
+  function claudeCodeCmd(rawToken: string) {
+    return `claude mcp add --transport http tandem ${serverUrl}/mcp --header "Authorization: Bearer ${rawToken}"`
   }
 
   function mcpConfig(rawToken: string) {
@@ -105,22 +109,40 @@ export function Settings({ onClose }: Props) {
         <section>
           <h3 className="text-sm font-semibold text-gray-300 mb-1">Connect an agent</h3>
           <p className="text-xs text-gray-500 mb-3">
-            Create an agent token, then paste the config into your MCP client (Bob, Claude Code, etc.).
+            Create an agent token, then give it to your MCP client (Bob, Claude Code, etc.).
+            The label is the name teammates use to <span className="text-gray-300">@mention</span> the agent.
           </p>
 
           {/* Just-created token */}
           {justCreated && (
-            <div className="rounded-xl bg-gray-800 p-4 mb-4 space-y-2">
-              <p className="text-xs text-green-400 font-medium">Token created — copy now, won't be shown again:</p>
-              <code className="block text-xs bg-gray-900 rounded px-2 py-1.5 break-all font-mono">{justCreated.rawToken}</code>
-              <p className="text-xs text-gray-400 mt-2 font-medium">MCP config:</p>
-              <pre className="text-xs bg-gray-900 rounded px-2 py-1.5 overflow-x-auto font-mono">{mcpConfig(justCreated.rawToken)}</pre>
-              <button
-                onClick={() => window.tandem.writeText(mcpConfig(justCreated.rawToken))}
-                className="text-xs rounded-lg bg-gray-700 px-3 py-1.5 hover:bg-gray-600"
-              >
-                Copy config
-              </button>
+            <div className="rounded-xl bg-gray-800 p-4 mb-4 space-y-3">
+              <p className="text-xs text-green-400 font-medium">
+                Token created — the raw token is shown only once. Copy what you need now.
+              </p>
+
+              {/* Claude Code command */}
+              <div>
+                <p className="text-xs text-gray-400 font-medium mb-1">Claude Code</p>
+                <pre className="text-xs bg-gray-900 rounded px-2 py-1.5 overflow-x-auto font-mono whitespace-pre-wrap break-all">{claudeCodeCmd(justCreated.rawToken)}</pre>
+                <button
+                  onClick={() => window.tandem.writeText(claudeCodeCmd(justCreated.rawToken))}
+                  className="mt-1.5 text-xs rounded-lg bg-gray-700 px-3 py-1.5 hover:bg-gray-600"
+                >
+                  Copy command
+                </button>
+              </div>
+
+              {/* JSON MCP config */}
+              <div>
+                <p className="text-xs text-gray-400 font-medium mb-1">MCP config (JSON)</p>
+                <pre className="text-xs bg-gray-900 rounded px-2 py-1.5 overflow-x-auto font-mono">{mcpConfig(justCreated.rawToken)}</pre>
+                <button
+                  onClick={() => window.tandem.writeText(mcpConfig(justCreated.rawToken))}
+                  className="mt-1.5 text-xs rounded-lg bg-gray-700 px-3 py-1.5 hover:bg-gray-600"
+                >
+                  Copy config
+                </button>
+              </div>
             </div>
           )}
 
@@ -128,7 +150,7 @@ export function Settings({ onClose }: Props) {
           <form onSubmit={handleCreateToken} className="flex gap-2 mb-4">
             <input
               type="text"
-              placeholder="Label (e.g. Bob, Claude Code)"
+              placeholder="Label — used for @mentions"
               value={newLabel}
               onChange={(e) => setNewLabel(e.target.value)}
               className="flex-1 rounded-lg bg-gray-800 px-3 py-2 text-sm outline-none ring-1 ring-gray-600 focus:ring-blue-500"

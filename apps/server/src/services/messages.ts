@@ -1,9 +1,12 @@
 import { nanoid } from 'nanoid'
-import { eq, and, asc } from 'drizzle-orm'
+import { eq, and, asc, inArray } from 'drizzle-orm'
 import { getDb } from '../db/index.js'
-import { messages, branches, sessionMembers } from '../db/schema.js'
+import { messages, branches, sessionMembers, messageMentions, users } from '../db/schema.js'
 import { bus } from '../events.js'
 import { checkRateLimit } from '../lib/rateLimit.js'
+import { findMentionedLabels } from '../lib/mentions.js'
+import { sessionAgentTokens } from './sessions.js'
+import { summarize } from '../ai/openrouter.js'
 import type { Message } from '@tandem/shared'
 
 function now() { return new Date().toISOString() }
@@ -16,6 +19,8 @@ function rowToMessage(row: typeof messages.$inferSelect): Message {
     parentId: row.parentId ?? null,
     authorType: row.authorType,
     authorId: row.authorId,
+    agentLabel: row.agentLabel ?? null,
+    sharedFromBranchId: row.sharedFromBranchId ?? null,
     model: row.model ?? null,
     content: row.content,
     status: row.status,
@@ -64,7 +69,7 @@ export async function getBranchMessages(
 // ─── Post a message ───────────────────────────────────────────────────────────
 
 export async function postMessage(
-  actor: { userId: string; tokenKind: 'desktop' | 'agent' },
+  actor: { userId: string; tokenKind: 'desktop' | 'agent'; tokenId?: string; tokenLabel?: string },
   branchId: string,
   content: string,
   triggerAi: boolean,
@@ -93,6 +98,13 @@ export async function postMessage(
   const ts = now()
   const parentId = branch.headMessageId ?? null
 
+  // @mentions of session agents; an agent never mentions itself.
+  const agentTokens = sessionAgentTokens(branch.sessionId).map((r) => r.token).filter((t) => t.id !== actor.tokenId)
+  const mentionedLabels = new Set(findMentionedLabels(content, [...new Set(agentTokens.map((t) => t.label))]))
+  const mentionedTokenIds = agentTokens.filter((t) => mentionedLabels.has(t.label)).map((t) => t.id)
+  // A message meant for an agent gets no built-in AI reply.
+  if (mentionedTokenIds.length) triggerAi = false
+
   let pendingId: string | undefined
 
   db.transaction((tx) => {
@@ -103,6 +115,7 @@ export async function postMessage(
       parentId,
       authorType,
       authorId: actor.userId,
+      agentLabel: authorType === 'agent' ? actor.tokenLabel ?? null : null,
       model: null,
       content,
       status: 'done',
@@ -110,6 +123,10 @@ export async function postMessage(
     }).run()
 
     tx.update(branches).set({ headMessageId: msgId }).where(eq(branches.id, branchId)).run()
+
+    for (const tokenId of mentionedTokenIds) {
+      tx.insert(messageMentions).values({ messageId: msgId, tokenId, createdAt: ts }).run()
+    }
 
     if (triggerAi) {
       pendingId = nanoid()
@@ -143,6 +160,64 @@ export async function postMessage(
   }
 
   return { userMessage, pendingAssistantId: pendingId }
+}
+
+// ─── Share to main ────────────────────────────────────────────────────────────
+// The branch owner posts an AI summary of the branch's own messages (everything since the fork)
+// into main, so the whole team gets the result.
+
+const SHARE_MAX_MESSAGES = 100
+const SHARE_MAX_CHARS = 20_000
+
+function fail(status: number, code: string, message: string): never {
+  throw Object.assign(new Error(message), { code, status })
+}
+
+export async function shareBranch(actor: { userId: string }, branchId: string): Promise<Message> {
+  const db = getDb()
+  const branch = db.select().from(branches).where(eq(branches.id, branchId)).get()
+  const path = branch && await getBranchMessages(actor, branchId) // also checks membership
+  if (!branch || !path) fail(404, 'not_found', 'Branch not found')
+  if (branch.isMain) fail(400, 'invalid_request', 'Main cannot be shared to itself')
+  if (branch.ownerId !== actor.userId) fail(403, 'forbidden', 'Only the branch owner can share it')
+
+  const own = path.filter((m) => m.branchId === branchId && m.status === 'done').slice(-SHARE_MAX_MESSAGES)
+  if (!own.length) fail(400, 'invalid_request', 'This branch has no messages to share yet')
+  if (!checkRateLimit(actor.userId)) fail(429, 'rate_limited', 'Rate limit exceeded (100 messages/hour)')
+
+  const authorIds = [...new Set(own.map((m) => m.authorId))]
+  const nameById = new Map(db.select().from(users).where(inArray(users.id, authorIds)).all().map((u) => [u.id, u.displayName]))
+  const transcript = own
+    .map((m) => `${m.authorType === 'assistant' ? 'AI' : m.agentLabel ?? nameById.get(m.authorId) ?? 'someone'}: ${m.content}`)
+    .join('\n')
+    .slice(-SHARE_MAX_CHARS)
+
+  const summary = await summarize(branch.model, transcript)
+  const mainId = db.select().from(branches).where(and(eq(branches.sessionId, branch.sessionId), eq(branches.isMain, true))).get()!.id
+
+  const msgId = nanoid()
+  db.transaction((tx) => {
+    // Read main's head inside the transaction so a concurrent post cannot fork the thread.
+    const main = tx.select().from(branches).where(eq(branches.id, mainId)).get()!
+    tx.insert(messages).values({
+      id: msgId,
+      sessionId: branch.sessionId,
+      branchId: mainId,
+      parentId: main.headMessageId ?? null,
+      authorType: 'assistant',
+      authorId: 'system',
+      model: branch.model,
+      content: summary,
+      status: 'done',
+      sharedFromBranchId: branchId,
+      createdAt: now(),
+    }).run()
+    tx.update(branches).set({ headMessageId: msgId }).where(eq(branches.id, mainId)).run()
+  })
+
+  const shared = rowToMessage(db.select().from(messages).where(eq(messages.id, msgId)).get()!)
+  bus.emitSession(branch.sessionId, { type: 'message_created', payload: shared })
+  return shared
 }
 
 // ─── AI queue (per-branch FIFO) ───────────────────────────────────────────────

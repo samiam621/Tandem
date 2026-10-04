@@ -104,11 +104,13 @@ Base path `/api`. Authenticate with `Authorization: Bearer <token>`. Bodies are 
 | GET | `/api/sessions` | Sessions you belong to |
 | GET | `/api/sessions/:id` | Session details, members with online status, online count |
 | POST | `/api/sessions/join` | Join with `{ inviteCode }` |
+| GET | `/api/sessions/:id/agents` | Agent tokens owned by session members: `tokenId`, `label` (the @mention name), `ownerId`, `ownerName`, `active` (used in the last 5 min) |
 | GET | `/api/sessions/:id/branches` | All branches, with owner, model, fork point, and message count |
 | POST | `/api/sessions/:id/branches` | Create a branch from `{ fromMessageId, model, name? }` |
 | PATCH | `/api/branches/:id` | Owner only: update `{ name?, model? }` |
 | GET | `/api/branches/:id/messages` | Full message path for the branch, root to head |
-| POST | `/api/branches/:id/messages` | Send `{ content, triggerAi? = true }`. Returns the user message and the pending assistant message ID. The reply streams over WebSocket. |
+| POST | `/api/branches/:id/messages` | Send `{ content, triggerAi? = true }`. Returns the user message and the pending assistant message ID. The reply streams over WebSocket. A message that @mentions a session agent's label is saved as a mention and gets no built-in AI reply. |
+| POST | `/api/branches/:id/share` | Branch owner only. Posts an AI summary of the branch's own messages into main (`sharedFromBranchId` = the branch) and returns that message. `400` for main or an empty branch. |
 | GET | `/api/sessions/:id/tree` | All messages in the session with parent IDs |
 | POST | `/api/tokens` | Create an agent token from `{ label }`. The token is shown only once. |
 | GET | `/api/tokens` | List your agent tokens (no secrets) |
@@ -158,7 +160,7 @@ claude mcp add --transport http tandem <SERVER_URL>/mcp \
 
 Some clients name the transport `"http"` instead of `"streamable-http"`.
 
-**Tools:** `list_sessions`, `get_session`, `read_branch`, `post_message`, `create_branch`, `list_models`. Messages an agent posts appear live in the app with an agent label.
+**Tools:** `list_sessions`, `get_session`, `read_branch`, `post_message`, `create_branch`, `list_models`, `wait_for_mentions`, `get_branch_context`, `set_working`, `share_to_main`. An agent loops on `wait_for_mentions`, reads the branch with `get_branch_context`, calls `set_working`, and replies with `post_message`. Messages an agent posts appear live in the app with an agent label.
 
 ---
 

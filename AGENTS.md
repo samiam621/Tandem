@@ -4,12 +4,12 @@ Tandem is a multiplayer AI chat desktop app. It is an Electron client talking to
 
 ## Where things are documented
 
-- **[ARCHITECTURE.md](ARCHITECTURE.md)**: read it before starting a build step, and before touching the data model, message tree or AI context, auth flow, WebSocket events, presence, MCP tools, or Electron security settings. It also holds the locked **Assumptions** and the **Build plan**.
+- **[ARCHITECTURE.md](ARCHITECTURE.md)**: read it before starting a build step, and before touching the data model, message tree or AI context, auth flow, WebSocket events, presence, MCP tools, or Electron security settings. It also holds the **Current MVP contracts** and the **Build plan**.
 - **[README.md](README.md)**: setup, env vars, scripts, and the authoritative **REST endpoint table**.
 
 ## Hard rules
 
-- **The Assumptions are locked.** Before changing anything in ARCHITECTURE.md § Assumptions, stop and ask the user.
+- **The MVP contracts stay compatible.** Before changing anything in ARCHITECTURE.md § Current MVP contracts, stop and ask the user.
 - **Services own all logic.** Permissions, writes, and event emission live in `apps/server/src/services/`. REST routes, WS handlers, and MCP tools are thin adapters: validate, call a service, serialize the result.
 - **Services emit broadcasts.** Every state change other clients should see emits on the event bus from inside the service, so REST, MCP, and WS writes all reach the desktop app live.
 - **The OpenRouter key stays on the server.** It is read only in `apps/server/src/ai/`, and no response, event, or desktop build carries it.

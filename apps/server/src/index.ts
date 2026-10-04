@@ -33,14 +33,14 @@ await server.register(wsHandler)
 await server.register(tokenRoutes)
 await server.register(mcpHandler)
 
-// Recover stale messages from a previous crash
-recoverStaleMessages()
-
-// Run migrations on startup
-import('./db/migrate.js').catch((err) => {
+// Run migrations on startup, before anything touches the tables
+await import('./db/migrate.js').catch((err) => {
   server.log.error(err, 'Migration failed')
   process.exit(1)
 })
+
+// Recover stale messages from a previous crash
+recoverStaleMessages()
 
 const port = Number(process.env.PORT ?? 3000)
 const host = process.env.HOST ?? '0.0.0.0'

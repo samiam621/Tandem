@@ -31,7 +31,7 @@ function buildTestDb() {
     );
     CREATE TABLE messages (
       id TEXT PRIMARY KEY, session_id TEXT NOT NULL, branch_id TEXT NOT NULL,
-      parent_id TEXT, author_type TEXT NOT NULL, author_id TEXT NOT NULL,
+      parent_id TEXT, author_type TEXT NOT NULL, author_id TEXT NOT NULL, agent_label TEXT, shared_from_branch_id TEXT,
       model TEXT, content TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending',
       created_at TEXT NOT NULL
     );

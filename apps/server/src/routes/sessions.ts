@@ -7,6 +7,7 @@ import {
   getSession,
   joinSession,
   getSessionBranches,
+  listSessionAgents,
 } from '../services/sessions.js'
 import { createBranch, getSessionTree } from '../services/branches.js'
 
@@ -50,6 +51,14 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
   app.get('/api/sessions/:id/branches', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const data = await getSessionBranches(req.actor!, id)
+    if (!data) return reply.code(404).send({ error: { code: 'not_found', message: 'Session not found' } })
+    return reply.send(data)
+  })
+
+  // GET /api/sessions/:id/agents
+  app.get('/api/sessions/:id/agents', { preHandler: requireAuth }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const data = await listSessionAgents(req.actor!, id)
     if (!data) return reply.code(404).send({ error: { code: 'not_found', message: 'Session not found' } })
     return reply.send(data)
   })

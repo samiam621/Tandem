@@ -1,14 +1,14 @@
 # Tandem Architecture
 
-Tandem is a desktop app (Mac and Windows) where several developers share one AI chat session. Everyone sees a shared **main thread**. Anyone can **branch** from any message into their own thread, and each branch can use a different model. Coding agents join over **MCP** and show up as participants.
+Tandem is a desktop app (Mac and Windows) where several developers share one AI chat session. Everyone sees a shared **main thread**. Anyone can **branch** from any message into their own thread, and each branch can have its own agent roster. Coding agents can join over **MCP**. The shipped MVP supports chat, branching, and MCP participants; durable agent runs and tool execution are the next milestone described here, not shipped behavior.
 
 MVP deadline: **October 18, 2026**. To ship: the server at a public URL, Mac and Windows installers on GitHub Releases, and a README.
 
 ---
 
-## Assumptions (locked)
+## Current MVP contracts
 
-These are fixed for the MVP. **Ask the team before changing any of them.**
+These describe the shipped MVP and should remain compatible as agent chat is added.
 
 | Area | Decision |
 |---|---|
@@ -16,15 +16,20 @@ These are fixed for the MVP. **Ask the team before changing any of them.**
 | Branch visibility | Every session member can **read** every branch. Only the branch owner can **post** in it. Any member can post in main. |
 | Identity | GitHub sign-in through the system browser, or guest. A guest gets a random device ID saved locally and picks a display name. One user = one account or one device ID. |
 | Token storage | The server issues an access token. The desktop app encrypts it with Electron `safeStorage` (the OS keychain) and keeps the ciphertext in `electron-store`. |
-| Models | All models go through OpenRouter's OpenAI-compatible API, with streaming. |
+| Models | The MVP's automatic reply uses the branch's model through OpenRouter's OpenAI-compatible API, with streaming. |
 | API key | One `OPENROUTER_API_KEY`, held only on the server. Users do not bring their own keys. |
-| AI replies | Every user message gets one AI reply from the branch's model. Messages in a branch are answered one at a time, in the order received. |
-| Context | An AI reply in a branch sees every message on the path from the session root down to that branch's head. |
-| Agents | Agents connected over MCP act as their token's user. Their messages are saved with `author_type = agent` and shown with an agent label. |
+| MCP identity | MCP clients act as their token's user. Their messages carry that user's `author_id` and `author_type = agent`; this is distinct from a configured, first-class Tandem agent. |
+| Context | Model context is built from the current branch's root-to-head path; sibling-branch messages are excluded. |
 
-**Open questions**
-- Should users see other people's branches? The spec says yes (above).
-- Agent identity: `users.kind` includes `agent`, but an agent also "acts as the token's user". MVP default: there is no separate agent user. Messages carry `author_id = token user` and `author_type = agent`. The member list shows an agent badge for that user while their agent token has been active in the last 5 minutes.
+## Agent chat target
+
+An agent is a configured participant, not just a model choice. It has a stable identity, model and system prompt, and an explicit set of tools. A branch has an ordered roster of agents and optionally one default agent. User messages route to explicitly mentioned agents; if there are no mentions, the branch default is used. If neither applies, no agent responds, allowing people to talk without triggering automation. The existing MVP auto-reply behavior is retained as a default-agent configuration during migration.
+
+Runs are durable database records. A run represents one agent's work triggered by a message and may contain multiple model steps, tool calls, and bounded handoffs to other agents. It posts visible progress and final output into the same branch message tree. Each run is scoped to one branch and one initiating user; its context is a snapshot of the branch path at the trigger point plus its own run events. It never reads sibling-branch messages.
+
+Agent definitions and tools are session-scoped and managed by their owner. Branching copies the source branch's roster (including its default) at the fork; later roster changes affect only that branch. Tool access is explicit per agent and checked by the server on every call. Tool inputs and outputs are bounded, validated against schemas, and recorded with the run. Secrets are never included in prompts, messages, or ordinary logs.
+
+The orchestration and persistence contract is independent of where a tool executes. The executor may eventually be server-hosted or supplied by a connected client; neither arbitrary shell execution on the server nor implicit trust in an MCP client is assumed. The execution boundary and approval policy must be decided before enabling real tools.
 
 ---
 
@@ -50,8 +55,8 @@ These are fixed for the MVP. **Ask the team before changing any of them.**
 │          services/  (all business logic; emits events on the event bus)     │
 │              │                    │                       │                 │
 │              ▼                    ▼                       ▼                 │
-│        db/ (Drizzle)      presence (in memory)     ai/ (OpenRouter stream)  │
-│        Postgres / SQLite  branch queues (memory)                            │
+│        db/ (Drizzle)      presence (in memory)     runs/ (durable worker) │
+│        Postgres / SQLite                         ai/ (OpenRouter stream)   │
 │                                                                             │
 │  event bus ──► ws/ broadcaster ──► every socket joined to the session       │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -63,9 +68,9 @@ REST routes, WebSocket handlers, and MCP tools all call the same functions in `a
 
 This is how a message posted with curl or MCP shows up live in the desktop app. The broadcast comes from the service, not from the transport that called it.
 
-### The server runs as one instance
+### The server runs as one instance (MVP)
 
-Presence, the per-branch AI queues, and one-time auth codes all live in memory. Deploy **exactly one** server instance. Scaling out would need Redis or something like it, which is out of scope.
+MVP presence, per-branch AI queues, and one-time auth codes live in memory. Deploy **exactly one** server instance. Durable runs move queue state and run progress into the database; an in-memory notification may wake a worker, but it is not the source of truth. This makes queued work recoverable after a process restart, but does not by itself make multiple server instances safe. Multi-instance workers require database-backed claims/leases and coordination, and shared presence still needs Redis or an equivalent.
 
 ---
 
@@ -76,23 +81,40 @@ npm workspaces monorepo, TypeScript everywhere (strict, ESM).
 ```
 apps/
   desktop/                 Electron + electron-vite + React + Tailwind
-    src/main/              window, menus, protocol handler, safeStorage, notifications
-    src/preload/           contextBridge API (the renderer's only path to main)
-    src/renderer/          React UI
+    src/main/               window, menus, protocol handler, safeStorage, notifications
+    src/preload/            narrow contextBridge API
+    src/renderer/
+      app/                  routes, app shell, auth/session providers
+      features/
+        auth/               sign-in, guest flow, GitHub exchange
+        sessions/           home, create/join session
+        chat/               message list, composer, branch navigation
+        agents/             agent roster, mentions, run controls/status
+        settings/           account, tokens, server URL
+      components/           reusable UI components
+      lib/                  typed REST client, WebSocket client, formatting
     electron-builder.yml   .dmg / .exe packaging, tandem:// scheme registration
-  server/                  Fastify
-    src/routes/            REST handlers (validate → call service → serialize)
-    src/ws/                /ws auth, join/leave, broadcaster
-    src/mcp/               /mcp Streamable HTTP server, tool definitions
-    src/services/          auth, sessions, branches, messages, tokens, presence, ai
-    src/db/                Drizzle schema + migrations
-    src/ai/                OpenRouter client (streaming), model list cache
-    src/events.ts          typed event bus
+  server/
+    src/routes/             REST adapters: validate → authorize/service → serialize
+    src/ws/                 WebSocket auth, session membership, event broadcaster
+    src/mcp/                MCP transport and tool definitions
+    src/services/           business logic: auth, sessions, branches, messages, agents
+    src/runs/               durable run lifecycle, queue/worker, recovery, cancellation
+    src/tools/              tool registry, schema validation, executor interface
+    src/ai/                 model-provider interface, OpenRouter adapter, streaming
+    src/db/                 Drizzle schema, migrations, repositories/queries
+    src/lib/                shared server utilities (tokens, rate limits, validation)
+    src/events.ts           typed domain events and in-process publisher
 packages/
-  shared/                  domain types, Zod request schemas, WS event types, MCP tool I/O
+  shared/
+    src/
+      schemas/              Zod request/response and tool-input schemas
+      types/                domain and API types
+      events/               WebSocket event contracts
+      mcp/                  shared MCP tool input/output contracts
 ```
 
-Shared Zod schemas validate on the server and type the client. Define a type once in `packages/shared`, then import it everywhere else.
+This is the target organization, not a requirement to move all existing MVP files at once. Keep the current paths working and introduce these boundaries as features are built. Shared Zod schemas validate requests on the server and provide types to the client; do not duplicate domain rules in the renderer. Routes and transport adapters stay thin. Put permission checks and state transitions in services, database access behind `db/`, and provider/executor-specific code behind interfaces. Split a feature into more files only when it has distinct responsibilities; avoid one-file-per-type and generic `utils` dumping grounds.
 
 ---
 
@@ -106,8 +128,18 @@ Messages form a **tree**. Each message stores `parent_id`, the message before it
 | `sessions` | id, title, owner_id, default_model, invite_code (unique), created_at |
 | `session_members` | session_id, user_id, joined_at, last_seen_at — PK (session_id, user_id) |
 | `branches` | id, session_id, owner_id (null for main), is_main, name, model, fork_message_id (null for main), head_message_id, created_at |
-| `messages` | id, session_id, branch_id, parent_id?, author_type (`user` \| `assistant` \| `agent`), author_id, model (assistant only), content, status (`pending` \| `streaming` \| `done` \| `error`), created_at |
+| `agents` | id, session_id, owner_id, name, model, system_prompt, created_at, updated_at, archived_at? |
+| `tools` | id, session_id, owner_id, name, description, input_schema, executor_kind, config_ref?, enabled, created_at |
+| `agent_tools` | agent_id, tool_id — PK (agent_id, tool_id) |
+| `branch_agents` | branch_id, agent_id, position, is_default — PK (branch_id, agent_id); at most one default per branch |
+| `messages` | id, session_id, branch_id, parent_id?, author_type (`user` \| `assistant` \| `agent` \| `tool`), author_id, agent_label? (MCP token label at post time), shared_from_branch_id? (Share to main summary), agent_id?, run_id?, tool_call_id?, kind (`text` \| `tool_call` \| `tool_result`), model?, content, status (`pending` \| `streaming` \| `done` \| `error`), created_at |
+| `message_mentions` | message_id, token_id, created_at — the agent token mentioned as `@label`, resolved when the message is accepted. *Hackathon: agents are MCP tokens; agent_id replaces token_id once first-class agents exist.* |
+| `runs` | id, session_id, branch_id, trigger_message_id, context_head_message_id, agent_id, agent_config_snapshot, initiated_by, parent_run_id?, status (`queued` \| `running` \| `waiting_tool` \| `cancel_requested` \| `succeeded` \| `failed` \| `cancelled`), attempt, lease_owner?, lease_expires_at?, heartbeat_at?, hop_count, token_budget, token_usage, error?, created_at, started_at?, finished_at? |
+| `run_steps` | id, run_id, sequence, kind (`model` \| `tool` \| `handoff`), status, request_metadata, result_metadata?, token_usage?, started_at?, finished_at? |
+| `tool_calls` | id, run_id, step_id, tool_id, tool_name_snapshot, status (`queued` \| `awaiting_approval` \| `running` \| `succeeded` \| `failed` \| `cancelled`), arguments, result?, error?, idempotency_key, created_at, started_at?, finished_at? |
 | `api_tokens` | id, user_id, kind (`desktop` \| `agent`), token_hash, label, created_at, last_used_at |
+
+Persisted request/result fields must be redacted of credentials and bounded in size. Tool configuration stores a secret reference, not secret values. Define JSON fields as validated shared schemas; do not treat arbitrary JSON as trusted executable instructions.
 
 ### Rules
 
@@ -115,6 +147,10 @@ Messages form a **tree**. Each message stores `parent_id`, the message before it
 - A new branch starts with `head_message_id = fork_message_id`. Its first message gets `parent_id = head`, which is the fork point.
 - Every new message gets `parent_id = branch.head_message_id`. In the same transaction, the branch head moves to the new message.
 - A branch's **parent branch** is the branch that holds its `fork_message_id`. This is how the sidebar draws branches as an indented tree.
+- Creating a branch snapshots the source branch's agent roster in the same transaction. Roster edits and default-agent changes are branch-local.
+- An agent and tool must belong to the same session as the branch/run. Only the agent owner may edit its definition; the branch owner manages that branch's roster. Both operations are authorized in services, not only in the UI.
+- Tool-call and tool-result messages are linked to their durable `tool_calls` record. They are visible in the timeline but are converted to the model's structured tool protocol by the context builder; they are not treated as ordinary user-authored prose.
+- `runs`, `run_steps`, and `tool_calls` are the source of truth for work state. WebSocket events are notifications, not durable state.
 
 ### Building AI context
 
@@ -126,22 +162,32 @@ path.reverse()
 context = path.filter(status == 'done')   // skip pending/error assistant messages
 ```
 
-Map each message to an OpenRouter role. `user` and `agent` messages become `user` (prefixed with the author's display name, so the model can tell people apart). `assistant` messages become `assistant`. This is a pure function over the message rows and the most important thing to unit-test. The main acceptance check is that a branch's reply uses history up to the fork point and nothing from sibling branches.
+The context builder is a pure function over the branch path, run snapshot, and linked tool events. User messages become `user` (prefixed with the author's display name); agent/assistant messages use the corresponding assistant role and agent identity; completed tool calls/results become the provider's structured tool messages. Pending, failed, or cancelled work is not silently presented as a successful tool result. The key acceptance check remains that a branch sees its fork history and its own events, never sibling-branch messages.
 
-### Message ordering and the AI queue
+### Routing and message ordering
 
-When a user posts with `triggerAi = true`, one transaction inserts both the **user message** and a **pending assistant message** (whose parent is the user message), then moves the head to the pending message. The pending message's ID goes onto that branch's in-memory FIFO queue, and one worker per branch drains it.
+When a user posts, one transaction inserts the user message, resolves and stores any agent mentions, updates the branch head, and creates a queued run for each selected agent. Explicit mentions select agents in the order they appear in the message; absent mentions, the branch default is selected. With no selected agent, the message remains a human-only post. During MVP compatibility, the default-agent configuration represents the old automatic single-model reply.
 
-If two people post in main at the same moment, the chain stays linear: `A → replyA(pending) → B → replyB(pending)`. By the time B's job runs, replyA is already `done`, so it is included in B's context. On server restart, mark any leftover `pending` or `streaming` messages as `error`.
+Runs for a branch execute serially in enqueue order, so messages and outputs form a deterministic parent chain. A run snapshots its starting context and roster/configuration when queued. Later edits do not silently change work already in progress. Different branches may run concurrently. Branch ownership rules apply to user-initiated posts and roster edits; agent output is attributed to its run and is authorized by the run's initiating actor and branch assignment.
 
-### Streaming a reply
+### Durable run lifecycle
 
-1. The worker sets the message to `streaming` and calls OpenRouter with `stream: true`, using the branch's current model.
-2. Each chunk emits `assistant_delta` to the session.
-3. When the stream ends, the worker saves the content and model, sets status `done`, and emits `assistant_done`.
-4. If it fails, the worker sets status `error`, saves the error text, and emits `assistant_error`.
+1. **Queue:** In the same transaction as the triggering message, persist the run and initial queued state. The database is authoritative; an in-memory wake-up queue is optional.
+2. **Claim:** A worker claims a queued run and records a lease/heartbeat before marking it running. The first release may use a single server worker, but transitions must be defined so a later database-backed multi-worker claim can be added safely.
+3. **Execute:** Persist each model step and tool call before making the external request. Stream deltas and step-state events to the session. Persist output and usage as the step completes.
+4. **Tool call:** Validate the tool is enabled for this agent and session, validate arguments against its schema, enforce timeout/output limits and any approval rule, then dispatch through the executor boundary. Persist result or explicit failure before the next model step.
+5. **Handoff:** A handoff creates a child run linked by `parent_run_id`, with the same branch and triggering message. It is allowed only for a rostered/authorized agent and within the configured hop limit.
+6. **Finish:** Set exactly one terminal status (`succeeded`, `failed`, or `cancelled`), persist final output/error and usage, and emit a final event. Retries must not duplicate visible messages or tool side effects.
 
-There is a simple per-user cap on messages per hour. It exists only to protect the OpenRouter key.
+Runs are not deleted on process restart. Queued work resumes; a run with an expired worker lease is reconciled and either safely retried or marked failed. An in-flight external request may have completed even if its response was lost; steps therefore need idempotency keys where supported, and non-idempotent tools must not be blindly replayed. Persisted cancellation requests are checked between model/tool steps, and executors receive cancellation when supported. A stop request is idempotent and may be issued by any session member, as specified by the roadmap.
+
+Every run has server-enforced maximum hops, tool-call count, elapsed time, and token budget. Rate limits apply per initiating user and branch. Tool allowlists, schemas, session/branch scope, timeouts, and output-size limits are enforced server-side. Fail closed on unknown tools or malformed arguments; record a clear run failure rather than returning success-shaped output.
+
+### Streaming a run
+
+Model and tool progress is persisted before its event is broadcast. WebSocket clients treat events as hints to refresh durable run/message state after reconnect; they must not rely on receiving every delta. Keep event payloads bounded and do not broadcast credentials or unredacted tool configuration.
+
+The current MVP single-reply worker can be migrated into this lifecycle as a run containing one model step and one assistant output. This keeps one ordering, recovery, event, and error model rather than maintaining a separate legacy queue.
 
 ---
 
@@ -218,6 +264,10 @@ The MCP server uses `@modelcontextprotocol/sdk` with the Streamable HTTP transpo
 | `post_message` | branchId, content, triggerAi = false | created message; if `triggerAi`, waits for and returns the AI reply |
 | `create_branch` | fromMessageId, model, name? | new branch |
 | `list_models` | — | model IDs and names |
+| `wait_for_mentions` | since?, timeoutSeconds = 25 (max 50) | `{ mentions, cursor }`: @mentions of this agent token after `since` in the user's sessions; waits until one arrives or the timeout passes. Agents loop, passing `cursor` back as `since`. |
+| `get_branch_context` | branchId, limit = 200 | session, branch with owner, `forkedFrom`, the root-to-head path (including history inherited from the fork), and the session's other branches |
+| `share_to_main` | branchId | branch owner only: posts an AI summary of the branch's own messages into main, linked by `shared_from_branch_id`; returns that message |
+| `set_working` | branchId, working = true | re-sends a `typing` event with the agent's label every 3 s ("Claude is working…") until the agent posts on that branch, turns it off, or 5 min pass |
 
 Each tool description says **when** an agent should use it. Example for `read_branch`: *"Read the conversation in a branch of a multiplayer chat session. Use this to catch up on what your team discussed before acting."*
 
@@ -275,3 +325,6 @@ Work the steps in order. A step is done only when its **acceptance check** visib
 - [x] **10. Tests**: unit tests for context building, permissions, presence counting, and the one-time code exchange. Integration tests for the main REST endpoints.
 - [x] **11. Deploy and package**: public server URL, `.dmg` and `.exe` on a GitHub Release, README finished. *(README complete; `npm run build:mac` / `build:win` produce the installers. Actual GitHub Release + public server deployment requires a CI environment and live credentials — verified: builds compile, tests pass, server runs.)*
 - [ ] **12. Optional**: tree visual, local MCP mode.
+- [ ] **13. Agent foundation**: decide tool-execution and approval boundaries; add agent/tool/branch-roster schemas and migrations, permission checks, shared contracts, and branch-roster snapshot tests.
+- [ ] **14. Durable runs**: add run/step/tool-call persistence, branch queue ordering, worker leases and restart recovery, cancellation, budgets, and idempotency tests; migrate the MVP automatic reply to a single-step run.
+- [ ] **15. Agent experience**: add mention resolution, roster management, run/tool activity events and UI, stop controls, and end-to-end tests for handoff, failure, reconnect, and permission enforcement.

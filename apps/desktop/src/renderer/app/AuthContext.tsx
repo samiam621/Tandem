@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react'
 import type { User } from '@tandem/shared'
-import { api } from './api'
+import { api } from '../lib/api'
 import { nanoid } from 'nanoid'
 
 interface AuthState {

@@ -50,9 +50,18 @@ export const messages = sqliteTable('messages', {
   parentId: text('parent_id'),
   authorType: text('author_type', { enum: ['user', 'assistant', 'agent'] }).notNull(),
   authorId: text('author_id').notNull(),
+  agentLabel: text('agent_label'), // agent token label at post time, e.g. "Claude"
+  sharedFromBranchId: text('shared_from_branch_id'), // set on a Share to main summary
   model: text('model'),
   content: text('content').notNull().default(''),
   status: text('status', { enum: ['pending', 'streaming', 'done', 'error'] }).notNull().default('pending'),
+  createdAt: text('created_at').notNull(),
+})
+
+// Agent tokens mentioned as @label in a message (agents are MCP tokens for now).
+export const messageMentions = sqliteTable('message_mentions', {
+  messageId: text('message_id').notNull(),
+  tokenId: text('token_id').notNull(),
   createdAt: text('created_at').notNull(),
 })
 

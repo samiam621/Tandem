@@ -5,6 +5,7 @@ import { eq, and } from 'drizzle-orm'
 import { getDb } from '../db/index.js'
 import { branches, sessionMembers } from '../db/schema.js'
 import { bus } from '../events.js'
+import { shareBranch } from '../services/messages.js'
 import type { Branch } from '@tandem/shared'
 
 function rowToBranch(row: typeof branches.$inferSelect): Branch {
@@ -48,5 +49,15 @@ export const branchRoutes: FastifyPluginAsync = async (app) => {
 
     bus.emitSession(branch.sessionId, { type: 'branch_updated', payload: updated })
     return reply.send(updated)
+  })
+
+  // POST /api/branches/:id/share
+  app.post('/api/branches/:id/share', { preHandler: requireAuth }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    try {
+      return reply.code(201).send(await shareBranch(req.actor!, id))
+    } catch (err: any) {
+      return reply.code(err.status ?? 500).send({ error: { code: err.code ?? 'server_error', message: err.message } })
+    }
   })
 }

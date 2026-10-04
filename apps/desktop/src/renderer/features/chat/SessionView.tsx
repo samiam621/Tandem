@@ -1,8 +1,9 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react'
+import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import type { Session, Branch, Message, User } from '@tandem/shared'
-import { api } from './api'
-import { useAuth } from './AuthContext'
-import { useWebSocket } from './useWebSocket'
+import { api } from '../../lib/api'
+import { useAuth } from '../../app/AuthContext'
+import { useWebSocket } from '../../lib/useWebSocket'
+import { MessageTreePanel } from './MessageTreePanel'
 
 interface Props {
   session: Session
@@ -16,6 +17,8 @@ export function SessionView({ session, onBack }: Props) {
   const [branches, setBranches] = useState<Branch[]>([])
   const [activeBranchId, setActiveBranchId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
+  // allMessages holds every branch's fetched messages for the tree visual
+  const [allMessages, setAllMessages] = useState<Map<string, Message[]>>(new Map())
   const [members, setMembers] = useState<User[]>([])
   const [models, setModels] = useState<{ id: string; name: string }[]>([])
   const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set())
@@ -25,6 +28,12 @@ export function SessionView({ session, onBack }: Props) {
   const [branchModel, setBranchModel] = useState('')
   const [branchName, setBranchName] = useState('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  // ── Typing indicators ────────────────────────────────────────────────────────
+  // Map from userId → { label: display label, isAgent: true when agentLabel was set, timerId }
+  const [typingUsers, setTypingUsers] = useState<Map<string, { label: string; isAgent: boolean; timerId: ReturnType<typeof setTimeout> }>>(new Map())
+  // Ref for outgoing throttle: timestamp of the last typing frame we sent
+  const lastTypingSentRef = useRef<number>(0)
 
   useEffect(() => {
     window.tandem.getToken().then(setToken)
@@ -45,12 +54,23 @@ export function SessionView({ session, onBack }: Props) {
         }
         break
       case 'message_created':
-        if (event.payload.sessionId === session.id && event.payload.branchId === activeBranchId) {
-          setMessages((prev) => {
-            if (prev.find((m) => m.id === event.payload.id)) return prev
-            return [...prev, event.payload]
+        if (event.payload.sessionId === session.id) {
+          const incoming = event.payload
+          // Keep allMessages in sync for the tree
+          setAllMessages((prev) => {
+            const existing = prev.get(incoming.branchId) ?? []
+            if (existing.find((m) => m.id === incoming.id)) return prev
+            const next = new Map(prev)
+            next.set(incoming.branchId, [...existing, incoming])
+            return next
           })
-          setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
+          if (incoming.branchId === activeBranchId) {
+            setMessages((prev) => {
+              if (prev.find((m) => m.id === incoming.id)) return prev
+              return [...prev, incoming]
+            })
+            setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
+          }
         }
         break
       case 'assistant_delta':
@@ -86,15 +106,47 @@ export function SessionView({ session, onBack }: Props) {
       case 'branch_created':
         if (event.payload.sessionId === session.id) {
           setBranches((prev) => [...prev, event.payload])
+          // Pre-seed an empty entry so the tree node appears immediately
+          setAllMessages((prev) => {
+            if (prev.has(event.payload.id)) return prev
+            const next = new Map(prev)
+            next.set(event.payload.id, [])
+            return next
+          })
         }
         break
       case 'branch_updated':
         setBranches((prev) => prev.map((b) => b.id === event.payload.id ? event.payload : b))
         break
+      case 'typing':
+        if (event.payload.branchId !== activeBranchId) break
+        if (event.payload.userId === user?.id) break
+        {
+          const { userId, agentLabel } = event.payload as { userId: string; branchId: string; agentLabel?: string }
+          setTypingUsers((prev) => {
+            // Cancel existing expiry timer for this user if any
+            const existing = prev.get(userId)
+            if (existing) clearTimeout(existing.timerId)
+            const member = members.find((m) => m.id === userId)
+            const isAgent = agentLabel != null
+            const label = agentLabel ?? member?.displayName ?? 'Someone'
+            const timerId = setTimeout(() => {
+              setTypingUsers((cur) => {
+                const next = new Map(cur)
+                next.delete(userId)
+                return next
+              })
+            }, 5000)
+            const next = new Map(prev)
+            next.set(userId, { label, isAgent, timerId })
+            return next
+          })
+        }
+        break
     }
-  }, [session.id, activeBranchId])
+  }, [session.id, activeBranchId, user?.id, members])
 
-  useWebSocket(serverUrl, token, session.id, handleWsEvent)
+  const { send: wsSend } = useWebSocket(serverUrl, token, session.id, handleWsEvent)
 
   useEffect(() => {
     api.sessions.branches(session.id).then((data) => {
@@ -109,9 +161,57 @@ export function SessionView({ session, onBack }: Props) {
     if (!activeBranchId) return
     api.messages.list(activeBranchId).then((data) => {
       setMessages(data)
+      setAllMessages((prev) => {
+        const next = new Map(prev)
+        next.set(activeBranchId, data)
+        return next
+      })
       setTimeout(() => messagesEndRef.current?.scrollIntoView(), 50)
     })
   }, [activeBranchId])
+
+  // Fetch messages for all branches so the tree can render fork points accurately.
+  // We do this lazily on the first time branches are loaded; WS events keep them fresh.
+  const fetchedBranchIds = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    for (const b of branches) {
+      if (b.id === activeBranchId) continue // already fetched above
+      if (fetchedBranchIds.current.has(b.id)) continue
+      fetchedBranchIds.current.add(b.id)
+      api.messages.list(b.id).then((data) => {
+        setAllMessages((prev) => {
+          const next = new Map(prev)
+          next.set(b.id, data)
+          return next
+        })
+      }).catch(() => {})
+    }
+  }, [branches, activeBranchId])
+
+  // Typing indicator text derived from current typingUsers map
+  const typingText = useMemo(() => {
+    const entries = [...typingUsers.values()]
+    if (entries.length === 0) return null
+    // Single typer: use "is working…" for agents, "is typing…" for humans
+    if (entries.length === 1) {
+      const { label, isAgent } = entries[0]
+      return isAgent ? `${label} is working…` : `${label} is typing…`
+    }
+    const labels = entries.map((v) => v.label)
+    if (labels.length === 2) return `${labels[0]} and ${labels[1]} are typing…`
+    return `${labels[0]}, ${labels[1]} and ${labels.length - 2} more are typing…`
+  }, [typingUsers])
+
+  // Outgoing typing frame — throttled to at most once every 3 s
+  function handleComposerChange(e: React.ChangeEvent<HTMLInputElement>) {
+    setComposerText(e.target.value)
+    if (!activeBranchId) return
+    const now = Date.now()
+    if (now - lastTypingSentRef.current >= 3000) {
+      lastTypingSentRef.current = now
+      wsSend({ type: 'typing', payload: { sessionId: session.id, branchId: activeBranchId } })
+    }
+  }
 
   async function handleSend(e: React.FormEvent) {
     e.preventDefault()
@@ -147,7 +247,7 @@ export function SessionView({ session, onBack }: Props) {
     : false
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-screen flex-col" data-testid="session-view">
       {/* Top bar */}
       <div className="flex items-center gap-3 border-b border-gray-800 px-4 py-2.5 shrink-0">
         <button onClick={onBack} className="text-xs text-gray-500 hover:text-gray-300">← Back</button>
@@ -158,7 +258,7 @@ export function SessionView({ session, onBack }: Props) {
       </div>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Left sidebar */}
+        {/* Left sidebar — members + branch list */}
         <div className="w-56 shrink-0 border-r border-gray-800 flex flex-col overflow-hidden">
           <div className="px-3 py-2 border-b border-gray-800">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Members</p>
@@ -193,7 +293,7 @@ export function SessionView({ session, onBack }: Props) {
           </div>
         </div>
 
-        {/* Center */}
+        {/* Center — message list + composer */}
         <div className="flex flex-1 flex-col overflow-hidden">
           {/* Messages */}
           <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
@@ -243,6 +343,11 @@ export function SessionView({ session, onBack }: Props) {
             </form>
           )}
 
+          {/* Typing indicator */}
+          {typingText && !branchingFromMsg && (
+            <div className="px-4 pb-1 text-xs text-gray-500 italic shrink-0">{typingText}</div>
+          )}
+
           {/* Composer */}
           {!branchingFromMsg && (
             <form onSubmit={handleSend} className="border-t border-gray-800 px-4 py-3 flex gap-2 shrink-0">
@@ -251,7 +356,7 @@ export function SessionView({ session, onBack }: Props) {
                   <input
                     type="text"
                     value={composerText}
-                    onChange={(e) => setComposerText(e.target.value)}
+                    onChange={handleComposerChange}
                     placeholder="Message…"
                     disabled={sending}
                     className="flex-1 rounded-lg bg-gray-800 px-3 py-2 text-sm outline-none ring-1 ring-gray-700 focus:ring-blue-500 disabled:opacity-50"
@@ -281,6 +386,16 @@ export function SessionView({ session, onBack }: Props) {
             </form>
           )}
         </div>
+
+        {/* Right — message tree visual */}
+        <div className="w-44 shrink-0 border-l border-gray-800 overflow-hidden flex flex-col">
+          <MessageTreePanel
+            branches={branches}
+            allMessages={allMessages}
+            activeBranchId={activeBranchId}
+            onSelectBranch={setActiveBranchId}
+          />
+        </div>
       </div>
     </div>
   )
@@ -298,6 +413,62 @@ function MessageRow({
   const author = members.find((m) => m.id === msg.authorId)
   const isMe = msg.authorId === currentUserId
   const isAssistant = msg.authorType === 'assistant'
+  const isAgent = msg.authorType === 'agent'
+
+  // Avatar circle style
+  const avatarClass = isAssistant
+    ? 'bg-purple-700'
+    : isAgent
+    ? 'bg-teal-800'
+    : 'bg-gray-700'
+
+  // Avatar label
+  const avatarContent = isAssistant
+    ? 'AI'
+    : isAgent
+    ? '⚙'
+    : (author?.displayName[0] ?? '?').toUpperCase()
+
+  // Author line text
+  let authorLabel: React.ReactNode
+  if (isAssistant) {
+    authorLabel = msg.model?.split('/').pop() ?? 'AI'
+  } else if (isAgent) {
+    const label = msg.agentLabel?.trim()
+    if (label) {
+      const ownerName = author?.displayName
+      authorLabel = (
+        <>
+          <span className="text-teal-400">{label}</span>
+          {ownerName && (
+            <span className="text-gray-600"> · via {ownerName}</span>
+          )}
+        </>
+      )
+    } else {
+      // No agentLabel — fall back to old badge
+      authorLabel = (
+        <>
+          {author?.displayName ?? 'Unknown'}
+          <span className="text-[10px] text-gray-600 ml-1">agent</span>
+        </>
+      )
+    }
+  } else {
+    authorLabel = author?.displayName ?? 'Unknown'
+  }
+
+  // Bubble style
+  let bubbleClass: string
+  if (isAgent) {
+    bubbleClass = 'bg-gray-800 text-gray-100 border-l-2 border-teal-500 rounded-2xl'
+  } else if (isAssistant) {
+    bubbleClass = 'bg-gray-800 text-gray-100 rounded-2xl'
+  } else if (isMe) {
+    bubbleClass = 'bg-blue-600 text-white rounded-2xl'
+  } else {
+    bubbleClass = 'bg-gray-800 text-gray-100 rounded-2xl'
+  }
 
   return (
     <div
@@ -305,15 +476,12 @@ function MessageRow({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      <div className={`h-7 w-7 shrink-0 rounded-full flex items-center justify-center text-xs font-bold ${isAssistant ? 'bg-purple-700' : 'bg-gray-700'}`}>
-        {isAssistant ? 'AI' : (author?.displayName[0] ?? '?').toUpperCase()}
+      <div className={`h-7 w-7 shrink-0 rounded-full flex items-center justify-center text-xs font-bold ${avatarClass}`}>
+        {avatarContent}
       </div>
       <div className={`max-w-[70%] flex flex-col gap-0.5 ${isMe ? 'items-end' : 'items-start'}`}>
         <div className="flex items-baseline gap-2">
-          <span className="text-xs text-gray-500">
-            {isAssistant ? (msg.model?.split('/').pop() ?? 'AI') : (author?.displayName ?? 'Unknown')}
-          </span>
-          {msg.authorType === 'agent' && <span className="text-[10px] text-gray-600">agent</span>}
+          <span className="text-xs text-gray-500">{authorLabel}</span>
           {hovered && msg.status === 'done' && (
             <button
               onClick={onBranchFrom}
@@ -323,11 +491,9 @@ function MessageRow({
             </button>
           )}
         </div>
-        <div className={`rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap break-words ${
-          isAssistant ? 'bg-gray-800 text-gray-100'
-            : isMe ? 'bg-blue-600 text-white'
-              : 'bg-gray-800 text-gray-100'
-        } ${msg.status === 'error' ? '!bg-red-900/40 text-red-300' : ''}`}>
+        <div className={`px-3 py-2 text-sm whitespace-pre-wrap break-words ${bubbleClass}${
+          msg.status === 'error' ? ' !bg-red-900/40 text-red-300' : ''
+        }`}>
           {msg.content || (msg.status === 'pending' ? '…' : '')}
           {msg.status === 'streaming' && <span className="ml-1 animate-pulse">▋</span>}
         </div>
