@@ -3,6 +3,7 @@ import { eq, and, inArray, isNull } from 'drizzle-orm'
 import { getDb } from '../db/index.js'
 import { sessions, sessionMembers, branches, users, apiTokens } from '../db/schema.js'
 import { bus } from '../events.js'
+import { rowToBranch } from './branches.js'
 import type { Session, Branch, User, SessionAgent } from '@tandem/shared'
 
 function now() { return new Date().toISOString() }
@@ -18,20 +19,6 @@ function rowToSession(row: typeof sessions.$inferSelect): Session {
     brief: row.brief,
     briefUpdatedAt: row.briefUpdatedAt ?? null,
     briefUpdatedBy: row.briefUpdatedBy ?? null,
-  }
-}
-
-function rowToBranch(row: typeof branches.$inferSelect): Branch {
-  return {
-    id: row.id,
-    sessionId: row.sessionId,
-    ownerId: row.ownerId ?? null,
-    isMain: Boolean(row.isMain),
-    name: row.name,
-    model: row.model,
-    forkMessageId: row.forkMessageId ?? null,
-    headMessageId: row.headMessageId ?? null,
-    createdAt: row.createdAt,
   }
 }
 

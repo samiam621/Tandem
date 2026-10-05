@@ -33,6 +33,25 @@ export interface Branch {
     forkMessageId: string | null;
     headMessageId: string | null;
     createdAt: string;
+    pinnedDocIds: string[];
+}
+export type ProjectDocKind = 'text' | 'pdf';
+export interface ProjectDoc {
+    id: string;
+    sessionId: string;
+    title: string;
+    kind: ProjectDocKind;
+    content: string;
+    uploadedBy: string;
+    createdAt: string;
+}
+export type ProjectDocMeta = Omit<ProjectDoc, 'content'> & {
+    chars: number;
+};
+export interface DocExcerpt {
+    docId: string;
+    title: string;
+    text: string;
 }
 export interface Message {
     id: string;
@@ -101,24 +120,30 @@ export declare const CreateBranchSchema: z.ZodObject<{
     fromMessageId: z.ZodString;
     model: z.ZodEffects<z.ZodString, string, string>;
     name: z.ZodOptional<z.ZodString>;
+    docIds: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
 }, "strip", z.ZodTypeAny, {
     fromMessageId: string;
     model: string;
     name?: string | undefined;
+    docIds?: string[] | undefined;
 }, {
     fromMessageId: string;
     model: string;
     name?: string | undefined;
+    docIds?: string[] | undefined;
 }>;
 export declare const UpdateBranchSchema: z.ZodObject<{
     name: z.ZodOptional<z.ZodString>;
     model: z.ZodOptional<z.ZodEffects<z.ZodString, string, string>>;
+    pinnedDocIds: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
 }, "strip", z.ZodTypeAny, {
     model?: string | undefined;
     name?: string | undefined;
+    pinnedDocIds?: string[] | undefined;
 }, {
     model?: string | undefined;
     name?: string | undefined;
+    pinnedDocIds?: string[] | undefined;
 }>;
 export declare const PostMessageSchema: z.ZodObject<{
     content: z.ZodString;
@@ -141,6 +166,29 @@ export declare const UpdateBriefSchema: z.ZodObject<{
     content: string;
     baseUpdatedAt: string | null;
 }>;
+export declare const DOC_MAX_CHARS = 200000;
+export declare const DOC_UPLOAD_MAX_BYTES: number;
+export declare const PINNED_DOCS_MAX_CHARS = 40000;
+export declare const DOC_EXCERPTS_K = 3;
+export declare const UploadDocSchema: z.ZodUnion<[z.ZodObject<{
+    title: z.ZodString;
+    text: z.ZodString;
+}, "strip", z.ZodTypeAny, {
+    title: string;
+    text: string;
+}, {
+    title: string;
+    text: string;
+}>, z.ZodObject<{
+    title: z.ZodString;
+    pdfBase64: z.ZodString;
+}, "strip", z.ZodTypeAny, {
+    title: string;
+    pdfBase64: string;
+}, {
+    title: string;
+    pdfBase64: string;
+}>]>;
 export declare const CreateTokenSchema: z.ZodObject<{
     label: z.ZodString;
 }, "strip", z.ZodTypeAny, {
@@ -239,7 +287,18 @@ export interface WsBriefUpdatedEvent {
         briefUpdatedBy: string;
     };
 }
-export type WsServerEvent = WsPresenceUpdateEvent | WsMessageCreatedEvent | WsAssistantDeltaEvent | WsAssistantDoneEvent | WsAssistantErrorEvent | WsBranchCreatedEvent | WsBranchUpdatedEvent | WsTypingEvent | WsBriefUpdatedEvent;
+export interface WsDocCreatedEvent {
+    type: 'doc_created';
+    payload: ProjectDocMeta;
+}
+export interface WsDocDeletedEvent {
+    type: 'doc_deleted';
+    payload: {
+        sessionId: string;
+        docId: string;
+    };
+}
+export type WsServerEvent = WsPresenceUpdateEvent | WsMessageCreatedEvent | WsAssistantDeltaEvent | WsAssistantDoneEvent | WsAssistantErrorEvent | WsBranchCreatedEvent | WsBranchUpdatedEvent | WsTypingEvent | WsBriefUpdatedEvent | WsDocCreatedEvent | WsDocDeletedEvent;
 export interface McpSessionSummary {
     id: string;
     title: string;
@@ -284,6 +343,7 @@ export interface McpBranchContext {
     };
     brief: string;
     briefUpdatedAt: string | null;
+    docs: ProjectDocMeta[];
     branch: Branch & {
         ownerDisplayName: string | null;
     };

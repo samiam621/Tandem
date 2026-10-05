@@ -5,6 +5,7 @@ import { bus } from '../events.js'
 import type { SessionEvent } from '../events.js'
 import { getBranchMessages } from './messages.js'
 import { getSessionBranches } from './sessions.js'
+import { listDocs } from './docs.js'
 import type { Actor } from './auth.js'
 import type { McpBranchContext, McpMention } from '@tandem/shared'
 
@@ -59,7 +60,7 @@ export function waitForMentions(actor: Actor, since: string, timeoutMs: number):
 
 // ─── Branch context ───────────────────────────────────────────────────────────
 
-// Everything an agent needs before working on a branch: the root-to-head path (including the
+// Everything an agent needs before working on a branch: the brief, the project docs list, the root-to-head path (including the
 // history inherited from the fork), who owns it, and the session's other branches.
 export async function getBranchContext(actor: Actor, branchId: string, limit: number): Promise<McpBranchContext | null> {
   const path = await getBranchMessages(actor, branchId) // also checks membership
@@ -87,6 +88,7 @@ export async function getBranchContext(actor: Actor, branchId: string, limit: nu
     session,
     brief,
     briefUpdatedAt,
+    docs: listDocs(actor, sessionId),
     branch: { ...branch, ownerDisplayName: ownerName(branch.ownerId) },
     forkedFrom: fork ? { branchId: fork.branchId, branchName: branchName.get(fork.branchId) ?? '', messageId: fork.id } : null,
     messages: path.slice(-limit).map((m) => ({

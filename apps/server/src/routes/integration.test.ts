@@ -7,6 +7,9 @@ import { authRoutes } from '../routes/auth.js'
 import { sessionRoutes } from '../routes/sessions.js'
 import { branchRoutes } from '../routes/branches.js'
 import { messageRoutes } from '../routes/messages.js'
+import { docRoutes } from '../routes/docs.js'
+import { buildChatContext } from '../ai/context.js'
+import { searchDocs, sessionDocs } from '../services/docs.js'
 import { modelsRoute } from '../routes/models.js'
 import { tokenRoutes } from '../routes/tokens.js'
 import { recoverStaleMessages } from '../services/messages.js'
@@ -15,6 +18,9 @@ import { listMentions, waitForMentions, getBranchContext, setWorking } from '../
 import { bus } from '../events.js'
 import Database from 'better-sqlite3'
 import { drizzle } from 'drizzle-orm/better-sqlite3'
+import { migrate } from 'drizzle-orm/better-sqlite3/migrator'
+import { readFileSync } from 'fs'
+import { fileURLToPath } from 'url'
 import * as schema from '../db/schema.js'
 
 // Override getDb to use an in-memory database for tests
@@ -25,16 +31,10 @@ function buildTestDb() {
   const sqlite = new Database(':memory:')
   sqlite.pragma('journal_mode = WAL')
   sqlite.pragma('foreign_keys = ON')
-  sqlite.exec(`
-    CREATE TABLE users (id TEXT PRIMARY KEY, kind TEXT NOT NULL, display_name TEXT NOT NULL, github_id TEXT, device_id TEXT, avatar_url TEXT, created_at TEXT NOT NULL);
-    CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, owner_id TEXT NOT NULL, default_model TEXT NOT NULL, invite_code TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, brief TEXT NOT NULL DEFAULT '', brief_updated_at TEXT, brief_updated_by TEXT);
-    CREATE TABLE session_members (session_id TEXT NOT NULL, user_id TEXT NOT NULL, joined_at TEXT NOT NULL, last_seen_at TEXT NOT NULL);
-    CREATE TABLE branches (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, owner_id TEXT, is_main INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL, model TEXT NOT NULL, fork_message_id TEXT, head_message_id TEXT, created_at TEXT NOT NULL);
-    CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, branch_id TEXT NOT NULL, parent_id TEXT, author_type TEXT NOT NULL, author_id TEXT NOT NULL, agent_label TEXT, shared_from_branch_id TEXT, model TEXT, content TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL);
-    CREATE TABLE message_mentions (message_id TEXT NOT NULL, token_id TEXT NOT NULL, created_at TEXT NOT NULL);
-    CREATE TABLE api_tokens (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, kind TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, label TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT);
-  `)
-  return drizzle(sqlite, { schema })
+  // The real migrations, so a migration missing from the journal fails here
+  const db = drizzle(sqlite, { schema })
+  migrate(db, { migrationsFolder: fileURLToPath(new URL('../../drizzle', import.meta.url)) })
+  return db
 }
 
 // Patch the db module
@@ -50,6 +50,7 @@ async function buildApp() {
   await app.register(sessionRoutes)
   await app.register(branchRoutes)
   await app.register(messageRoutes)
+  await app.register(docRoutes)
   await app.register(modelsRoute)
   await app.register(tokenRoutes)
   recoverStaleMessages()
@@ -358,6 +359,82 @@ describe('REST integration', () => {
     const ctx = (await getBranchContext(claude, bugfixBranchId, 200))!
     expect(ctx.brief).toBe('Use Postgres 16.')
     expect(ctx.briefUpdatedAt).not.toBe(v1)
+    bus.offSession(onEvent)
+  })
+
+  it('project docs: members upload text and PDF, branches pin them, deletes unpin', async () => {
+    const as = (tok: string) => ({ authorization: `Bearer ${tok}` })
+    const upload = (tok: string, payload: object, sess = sessionId) =>
+      app.inject({ method: 'POST', url: `/api/sessions/${sess}/docs`, headers: as(tok), payload })
+    const seen: string[] = []
+    const onEvent = ({ event }: any) => seen.push(event.type)
+    bus.onSession(onEvent)
+
+    const auth = await upload(token, { title: 'Auth spec', text: 'Tokens are hashed with HMAC-SHA256.' })
+    expect(auth.statusCode).toBe(201)
+    expect(auth.json()).toMatchObject({ title: 'Auth spec', kind: 'text', chars: 35, uploadedBy: userId })
+    expect(auth.json().content).toBeUndefined()
+    const pdfBase64 = readFileSync(new URL('./fixtures/deploy-spec.pdf', import.meta.url)).toString('base64')
+    const pdf = await upload(user2Token, { title: 'Deploy spec', pdfBase64 })
+    expect(pdf.statusCode).toBe(201)
+    expect(pdf.json().kind).toBe('pdf')
+    expect(seen.filter((t) => t === 'doc_created')).toHaveLength(2)
+
+    const full = await app.inject({ method: 'GET', url: `/api/docs/${pdf.json().id}`, headers: as(token) })
+    expect(full.json().content).toBe('Deploy spec: the server runs on Render with one instance.')
+    const list = await app.inject({ method: 'GET', url: `/api/sessions/${sessionId}/docs`, headers: as(user2Token) })
+    expect(list.json().map((d: any) => d.title)).toEqual(['Auth spec', 'Deploy spec'])
+
+    // Bad input and outsiders
+    expect((await upload(token, { title: 'Junk', pdfBase64: 'bm90IGEgcGRm' })).statusCode).toBe(400)
+    expect((await upload(token, { title: 'Empty', text: '   ' })).statusCode).toBe(400)
+    expect((await upload(token, { title: 'No body' })).statusCode).toBe(400)
+    const mallory = (await app.inject({
+      method: 'POST', url: '/api/auth/guest', payload: { displayName: 'Mallory', deviceId: 'device-mallory-docs' },
+    })).json().token
+    expect((await upload(mallory, { title: 'x', text: 'x' })).statusCode).toBe(404)
+    expect((await app.inject({ method: 'GET', url: `/api/docs/${auth.json().id}`, headers: as(mallory) })).statusCode).toBe(404)
+
+    // Pin at creation; a doc from another session is refused
+    const mainMsgs = (await app.inject({ method: 'GET', url: `/api/branches/${mainBranchId}/messages`, headers: as(token) })).json()
+    const branch = (await app.inject({
+      method: 'POST', url: `/api/sessions/${sessionId}/branches`, headers: as(token),
+      payload: { fromMessageId: mainMsgs[0].id, model: 'test-model:free', name: 'auth work', docIds: [auth.json().id] },
+    })).json()
+    expect(branch.pinnedDocIds).toEqual([auth.json().id])
+    const otherSession = (await app.inject({
+      method: 'POST', url: '/api/sessions', headers: as(mallory), payload: { title: 'Other', defaultModel: 'x:free' },
+    })).json().session.id
+    const foreign = (await upload(mallory, { title: 'Secret', text: 'secret' }, otherSession)).json().id
+    const badPin = await app.inject({
+      method: 'POST', url: `/api/sessions/${sessionId}/branches`, headers: as(token),
+      payload: { fromMessageId: mainMsgs[0].id, model: 'test-model:free', docIds: [foreign] },
+    })
+    expect(badPin.statusCode).toBe(400)
+
+    // The owner re-pins; another member may not
+    const patch = (tok: string, pinnedDocIds: string[]) =>
+      app.inject({ method: 'PATCH', url: `/api/branches/${branch.id}`, headers: as(tok), payload: { pinnedDocIds } })
+    expect((await patch(user2Token, [])).statusCode).toBe(403)
+    const repinned = await patch(token, [auth.json().id, pdf.json().id])
+    expect(repinned.json().pinnedDocIds).toEqual([auth.json().id, pdf.json().id])
+    expect((await patch(token, [foreign])).statusCode).toBe(400)
+
+    // Agents see the docs list and can search them
+    const claude = (await resolveToken(claudeToken))!
+    const ctx = (await getBranchContext(claude, branch.id, 200))!
+    expect(ctx.docs.map((d) => d.title)).toEqual(['Auth spec', 'Deploy spec'])
+    expect(ctx.branch.pinnedDocIds).toHaveLength(2)
+    expect(searchDocs(claude, sessionId, 'render instance', 3)[0].docId).toBe(pdf.json().id)
+
+    // Only the uploader or the session owner deletes; deleting unpins it everywhere
+    const del = (tok: string, id: string) => app.inject({ method: 'DELETE', url: `/api/docs/${id}`, headers: as(tok) })
+    expect((await del(user2Token, auth.json().id)).statusCode).toBe(403)
+    expect((await del(token, pdf.json().id)).statusCode).toBe(204) // owner deletes User2's doc
+    const after = (await app.inject({ method: 'GET', url: `/api/sessions/${sessionId}/branches`, headers: as(token) })).json()
+    expect(after.find((b: any) => b.id === branch.id).pinnedDocIds).toEqual([auth.json().id])
+    expect(seen).toContain('doc_deleted')
+    expect(sessionDocs(sessionId).map((d) => d.title)).toEqual(['Auth spec'])
     bus.offSession(onEvent)
   })
 

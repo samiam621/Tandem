@@ -19,7 +19,7 @@ These describe the shipped MVP and should remain compatible as agent chat is add
 | Models | The branch model must be an OpenRouter `:free` id (`FreeModelIdSchema` in `packages/shared`). The automatic reply streams through OpenRouter's OpenAI-compatible API. |
 | API key | One `OPENROUTER_API_KEY`, held only on the server. Users do not bring their own keys. |
 | MCP identity | MCP clients act as their token's user. Their messages carry that user's `author_id` and `author_type = agent`; this is distinct from a configured, first-class Tandem agent. |
-| Context | Model context is built from the session's project brief (always the latest version) plus the current branch's root-to-head path; sibling-branch messages are excluded. |
+| Context | Model context is built from the session's project brief (always the latest version), the project docs pinned to the branch (in full, up to a budget), an index of all project docs, keyword-matched excerpts of the unpinned docs, plus the current branch's root-to-head path; sibling-branch messages are excluded. Docs, like the brief, are read live. |
 
 ## Agent chat target
 
@@ -128,7 +128,8 @@ Messages form a **tree**. Each message stores `parent_id`, the message before it
 | `users` | id, kind (`github` \| `guest` \| `agent`), display_name, github_id?, device_id?, avatar_url, created_at |
 | `sessions` | id, title, owner_id, default_model, invite_code (unique), created_at, brief (markdown, default ''), brief_updated_at?, brief_updated_by? |
 | `session_members` | session_id, user_id, joined_at, last_seen_at — PK (session_id, user_id) |
-| `branches` | id, session_id, owner_id (null for main), is_main, name, model, fork_message_id (null for main), head_message_id, created_at |
+| `branches` | id, session_id, owner_id (null for main), is_main, name, model, fork_message_id (null for main), head_message_id, created_at, pinned_doc_ids (JSON array, default `[]`) |
+| `project_docs` | id, session_id, title, kind (`text` \| `pdf`), content (the text; extracted for a PDF), uploaded_by, created_at |
 | `agents` | id, session_id, owner_id, name, model, system_prompt, created_at, updated_at, archived_at? |
 | `tools` | id, session_id, owner_id, name, description, input_schema, executor_kind, config_ref?, enabled, created_at |
 | `agent_tools` | agent_id, tool_id — PK (agent_id, tool_id) |
@@ -148,6 +149,7 @@ Persisted request/result fields must be redacted of credentials and bounded in s
 - A new branch starts with `head_message_id = fork_message_id`. Its first message gets `parent_id = head`, which is the fork point.
 - Every new message gets `parent_id = branch.head_message_id`. In the same transaction, the branch head moves to the new message.
 - A branch's **parent branch** is the branch that holds its `fork_message_id`. This is how the sidebar draws branches as an indented tree.
+- A branch's `pinned_doc_ids` may only name project docs of its own session. They are set when it is created and changed by its owner. Deleting a doc removes it from every branch's pins in the same transaction. Main starts with no pins.
 - Creating a branch snapshots the source branch's agent roster in the same transaction. Roster edits and default-agent changes are branch-local.
 - An agent and tool must belong to the same session as the branch/run. Only the agent owner may edit its definition; the branch owner manages that branch's roster. Both operations are authorized in services, not only in the UI.
 - Tool-call and tool-result messages are linked to their durable `tool_calls` record. They are visible in the timeline but are converted to the model's structured tool protocol by the context builder; they are not treated as ordinary user-authored prose.
@@ -163,7 +165,12 @@ path.reverse()
 context = path.filter(status == 'done')   // skip pending/error assistant messages
 ```
 
-The context builder is a pure function over the branch path, run snapshot, and linked tool events. A short system prompt opens the context and explains the multiplayer format. If the session has a **project brief**, it follows as a second system message. The brief is read live at reply time, not from the path, so a branch forked before a brief edit still sees the latest version. User messages become `user` (prefixed with the author's display name, or an agent's token label); agent/assistant messages use the corresponding assistant role and agent identity; completed tool calls/results become the provider's structured tool messages. Pending, failed, or cancelled work is not silently presented as a successful tool result. The key acceptance check remains that a branch sees its fork history and its own events, never sibling-branch messages.
+The context builder is a pure function over the branch path, run snapshot, and linked tool events. A short system prompt opens the context and explains the multiplayer format. If the session has a **project brief**, it follows as a second system message. The brief is read live at reply time, not from the path, so a branch forked before a brief edit still sees the latest version. **Project docs** follow, also read live:
+1. The docs pinned to the branch, in full, under `### <title>` headings, truncated at `PINNED_DOCS_MAX_CHARS` (40,000) with a marker.
+2. An index of every doc's title, with the pinned ones marked.
+3. Up to `DOC_EXCERPTS_K` (3) passages of the unpinned docs that best match the latest non-assistant message on the path. Docs are split on blank lines into passages of about 1,500 characters. Passages are ranked by the summed IDF of the query terms they contain, and a passage with no matching term is never added.
+
+This is how a branch starts with the slice of main's docs it was given, and still pulls in what it is missing. User messages become `user` (prefixed with the author's display name, or an agent's token label); agent/assistant messages use the corresponding assistant role and agent identity; completed tool calls/results become the provider's structured tool messages. Pending, failed, or cancelled work is not silently presented as a successful tool result. The key acceptance check remains that a branch sees its fork history and its own events, never sibling-branch messages.
 
 ### Routing and message ordering
 
@@ -233,6 +240,8 @@ Each app window opens one socket. The first frame must be `{ "type": "auth", "pa
 | S→C | `branch_updated` | full branch |
 | S→C | `typing` | userId, branchId |
 | S→C | `brief_updated` | sessionId, brief, briefUpdatedAt, briefUpdatedBy |
+| S→C | `doc_created` | doc metadata (id, sessionId, title, kind, chars, uploadedBy, createdAt), never the content |
+| S→C | `doc_deleted` | sessionId, docId (affected branches also get `branch_updated`) |
 
 ### Presence
 
@@ -264,12 +273,15 @@ The MCP server uses `@modelcontextprotocol/sdk` with the Streamable HTTP transpo
 | `get_session` | sessionId | members with online status; branches with owner and model |
 | `read_branch` | branchId, limit = 50 | newest messages on the branch path, oldest first, with author and model |
 | `post_message` | branchId, content, triggerAi = false | created message; if `triggerAi`, waits for and returns the AI reply |
-| `create_branch` | fromMessageId, model, name? | new branch |
+| `create_branch` | fromMessageId, model, name?, docIds? | new branch, with `docIds` pinned |
 | `list_models` | — | free model IDs and names (`:free` ids only) |
 | `wait_for_mentions` | since?, timeoutSeconds = 25 (max 50) | `{ mentions, cursor }`: @mentions of this agent token after `since` in the user's sessions; waits until one arrives or the timeout passes. Agents loop, passing `cursor` back as `since`. |
-| `get_branch_context` | branchId, limit = 200 | session, the session's `brief` and `briefUpdatedAt`, branch with owner, `forkedFrom`, the root-to-head path (including history inherited from the fork), and the session's other branches |
+| `get_branch_context` | branchId, limit = 200 | session, the session's `brief` and `briefUpdatedAt`, `docs` (project doc metadata), branch with owner and `pinnedDocIds`, `forkedFrom`, the root-to-head path (including history inherited from the fork), and the session's other branches |
 | `share_to_main` | branchId | branch owner only: posts an AI summary of the branch's own messages into main, linked by `shared_from_branch_id`; returns that message |
 | `update_brief` | sessionId, content, baseUpdatedAt | any member: replaces the session's project brief; `baseUpdatedAt` must match the stored `briefUpdatedAt` (null if never set), otherwise a conflict error |
+| `list_project_docs` | sessionId | the session's project docs: id, title, kind, chars (no content) |
+| `read_project_doc` | docId, offset = 0, limit = 20000 | title and kind, `text` from `offset`, `totalChars`, for reading long docs in slices |
+| `search_project_docs` | sessionId, query, k = 5 (max 10) | best-matching passages with docId and title, the same ranking the context builder uses |
 | `set_working` | branchId, working = true | re-sends a `typing` event with the agent's label every 3 s ("Claude is working…") until the agent posts on that branch, turns it off, or 5 min pass |
 
 Each tool description says **when** an agent should use it. Example for `read_branch`: *"Read the conversation in a branch of a multiplayer chat session. Use this to catch up on what your team discussed before acting."*
@@ -292,10 +304,17 @@ Stretch goal: a local stdio MCP mode (`npx tandem-mcp`) that reuses the desktop 
 - **Sign-in**: GitHub button, a field to paste the fallback code, and a display name field with Continue as guest.
 - **Home**: the user's sessions, New session (title and default model), and Join (invite code or link).
 - **Session** (three columns):
-  - **Left**: title, Copy invite link, online count, a **Project brief** card that opens the brief to read or edit (any member; a save from an outdated version is refused and the draft kept), and the member list with online dots and agent badges. Below that, the branch tree, with main at the top.
+  - **Left**: title, Copy invite link, online count, a **Project brief** card that opens the brief to read or edit (any member; a save from an outdated version is refused and the draft kept), a **Project docs** card (see below), the member list with online dots and agent badges, and the branch tree with main at the top.
   - **Center**: messages for the selected branch, each with author, time, and model for AI messages. Markdown and code blocks render with syntax highlighting. Hovering a message shows **Branch from here**. A typing indicator shows who is typing in this branch.
   - **Bottom**: the composer, plus a model dropdown for the branch owner. Non-owners see a disabled composer with a **Branch from latest message** button.
   - **Right** (build last): the message tree visual.
+- **Project docs card** (left column, below Project brief):
+  - Lists each doc's title, size in chars, and kind (PDF label if applicable). Clicking a doc opens the **doc viewer modal**.
+  - **Upload button** opens a file picker (`accept=".md,.markdown,.txt,.json,.yaml,.yml,.csv,.ts,.tsx,.js,.py,.go,.rs,.java,.sql,.html,.css,.pdf"`). Text files are sent as `{ title, text }`; PDFs are base64-encoded and sent as `{ title, pdfBase64 }`. Files over 10 MB are refused client-side before upload. Server errors (e.g. scanned PDF with no text) are shown inline.
+  - **Doc viewer modal**: shaped like `BriefPanel`, shows the full extracted text in a monospace pre block. The uploader or the session owner sees a **Delete** button (with a confirm).
+  - Live updates: `doc_created` adds to the list; `doc_deleted` removes it (also reflected via `branch_updated` for pin counts).
+- **Branch dialog** (Branch from here): when docs exist, shows a "Pin docs to this branch" checkbox list (none ticked by default). Ticked ids are passed as `docIds` on create.
+- **Pinned docs control** (branch list item, left sidebar): branch owners see a "Pinned docs (N)" button next to "yours"; clicking it opens a modal checklist that saves changes immediately via `PATCH /api/branches/:id`. Other members see a read-only "Pinned docs (N)" count when N > 0. Main has no owner so it shows nothing.
 - **Settings**: account and Sign out, **Connect an agent** (creates a token and copies the MCP config), the list of agent tokens with revoke, and the server URL.
 
 ### Native behavior
@@ -308,7 +327,7 @@ Stretch goal: a local stdio MCP mode (`npx tandem-mcp`) that reuses the desktop 
 
 ## Out of scope (MVP)
 
-Branch merging, editing or deleting messages, uploads, model tool use, bring-your-own keys, roles beyond owner and member, billing, code signing and notarization, auto-updates, Linux builds, and local models.
+Branch merging, editing or deleting messages, editing uploaded docs (delete and re-upload instead), file types other than text and PDF, model tool use, bring-your-own keys, roles beyond owner and member, billing, code signing and notarization, auto-updates, Linux builds, and local models.
 
 ---
 
@@ -330,4 +349,5 @@ Work the steps in order. A step is done only when its **acceptance check** visib
 - [ ] **12. Optional**: tree visual, local MCP mode.
 - [ ] **13. Agent foundation**: decide tool-execution and approval boundaries; add agent/tool/branch-roster schemas and migrations, permission checks, shared contracts, and branch-roster snapshot tests.
 - [ ] **14. Durable runs**: add run/step/tool-call persistence, branch queue ordering, worker leases and restart recovery, cancellation, budgets, and idempotency tests; migrate the MVP automatic reply to a single-step run.
+- [ ] **16. Project docs**: upload text and PDF docs to a session, pin them to branches, and add excerpts of the unpinned docs to each reply. Also add MCP list, read, and search. ✅ A doc uploaded in main appears live in a second window. A branch created with one doc ticked answers from it, and a question about an unticked doc gets that doc's matching passage in context. An MCP `search_project_docs` call returns the passage. *(Server: Claude. Desktop: Bob. See PROJECT_DOCS.md.)*
 - [ ] **15. Agent experience**: add mention resolution, roster management, run/tool activity events and UI, stop controls, and end-to-end tests for handoff, failure, reconnect, and permission enforcement.

@@ -29,11 +29,13 @@ export const CreateBranchSchema = z.object({
     // Must be an OpenRouter :free model — rejected at 400 if not
     model: FreeModelIdSchema,
     name: z.string().min(1).max(64).optional(),
+    docIds: z.array(z.string().min(1)).max(100).optional(), // project docs to pin to the new branch
 });
 export const UpdateBranchSchema = z.object({
     name: z.string().min(1).max(64).optional(),
     // When provided, must be an OpenRouter :free model — rejected at 400 if not
     model: FreeModelIdSchema.optional(),
+    pinnedDocIds: z.array(z.string().min(1)).max(100).optional(), // replaces the branch's pins
 });
 export const PostMessageSchema = z.object({
     content: z.string().min(1),
@@ -45,6 +47,16 @@ export const UpdateBriefSchema = z.object({
     content: z.string().max(BRIEF_MAX_CHARS),
     baseUpdatedAt: z.string().nullable(),
 });
+export const DOC_MAX_CHARS = 200_000; // stored text per doc, after PDF extraction
+export const DOC_UPLOAD_MAX_BYTES = 10 * 1024 * 1024; // raw PDF size
+export const PINNED_DOCS_MAX_CHARS = 40_000; // pinned docs' share of a reply's context
+export const DOC_EXCERPTS_K = 3; // excerpts from unpinned docs added to each reply
+// A text file is sent as text; a PDF as base64, and the server extracts its text.
+export const UploadDocSchema = z.union([
+    z.object({ title: z.string().min(1).max(200), text: z.string().min(1).max(DOC_MAX_CHARS) }),
+    // base64 is 4/3 of the raw size
+    z.object({ title: z.string().min(1).max(200), pdfBase64: z.string().min(1).max(Math.ceil(DOC_UPLOAD_MAX_BYTES / 3) * 4) }),
+]);
 export const CreateTokenSchema = z.object({
     label: z.string().min(1).max(64),
 });
