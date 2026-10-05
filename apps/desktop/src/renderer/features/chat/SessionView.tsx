@@ -376,7 +376,8 @@ export function SessionView({ session, onBack, onSettings }: Props) {
     try {
       const docIds = branchDocIds.length > 0 ? branchDocIds : undefined
       const branch = await api.branches.create(session.id, branchingFromMsg.id, branchModel, branchName || undefined, docIds)
-      setBranches((prev) => [...prev, branch])
+      // The branch_created event usually arrives before this response, so it may already be listed
+      setBranches((prev) => prev.find((b) => b.id === branch.id) ? prev : [...prev, branch])
       setActiveBranchId(branch.id)
       setBranchingFromMsg(null)
       setBranchName('')

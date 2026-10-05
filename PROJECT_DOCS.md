@@ -126,14 +126,31 @@ Production is broken in two ways.
 
 ### R2 review gates (Claude)
 
-- [ ] **R2-A PR:** read the diff. Check the cherry-pick matches `2568859`. On the PR branch, check that a fresh scratch DB gets the `brief*` columns, and that typecheck and tests pass.
-- [ ] **R2-B:** rerun the desktop driver flow. Rapidly untick two pins and confirm the UI matches the server. Create a branch and confirm it's listed once. Confirm the uploader name is shown.
-- [ ] **R2-C:** run the migrations on a copy of Sam's local `tandem.db`. Confirm no branch or session keeps the llama id, and confirm a reply on an old session's main branch works.
-- [ ] Write the review results here. Any blocker goes back to Bob.
+- [x] **R2-A PR:** read the diff. Check the cherry-pick matches `2568859`. On the PR branch, check that a fresh scratch DB gets the `brief*` columns, and that typecheck and tests pass.
+- [x] **R2-B:** rerun the desktop driver flow. Rapidly untick two pins and confirm the UI matches the server. Create a branch and confirm it's listed once. Confirm the uploader name is shown.
+- [x] **R2-C:** run the migrations on a copy of Sam's local `tandem.db`. Confirm no branch or session keeps the llama id, and confirm a reply on an old session's main branch works.
+- [x] Write the review results here. Any blocker goes back to Bob.
+
+**Review results (Claude, 2026-10-05).** Note that `docs-server` was merged as #9 *before* this review ran, so the items below were fixed in follow-up PRs instead of being sent back to Bob.
+
+- **R2-A (#8), approved after a conflict fix.**
+  - The code diff is correct: the model swap touches the 4 planned files, and `git range-diff` shows the cherry-pick is identical to `2568859`.
+  - Once #9 landed, #8 conflicted with `main` in `_journal.json`, because `main` already had 0005 through 0007. Claude merged `main` into the PR branch, keeping `main`'s journal.
+  - #8 is now mergeable, and its diff against `main` is only the model swap. Typecheck passes and all 48 tests pass on the merged result.
+  - #8 has to be merged. Until then, `main` still lists the dead llama model as its dev default and in `e2e.mjs`.
+- **R2-B: two of three fixed, and one fix completed by Claude.**
+  - **B1 fixed.** In the real app, pinning both docs and then unticking both 60 ms apart leaves the UI and the server in agreement (`[]`).
+  - **N3 fixed:** the uploader's name shows on each doc.
+  - **N1 was not fixed, but the mistake is Claude's.** Claude's note said to guard `branch_created`. However, the server emits that event *before* it responds to the create request, so the event adds the branch first, and then `handleBranch` appended it again. Claude added the same guard in `handleBranch` (PR `fix/r2-review`) and checked in the app that a new branch is listed once.
+- **R2-C: correct, but the snapshot was missing.**
+  - `0007_retire_llama` runs on a fresh DB and on a copy of Sam's local DB (8 migrations applied). Applied to synthetic llama rows, it rewrites them to qwen and leaves other models alone.
+  - Sam's local DB had no llama rows left, so the "reply on an old session's main branch" check was run against synthetic data instead.
+  - **`meta/0007_snapshot.json` was never committed.** It was left untracked in Sam's checkout, so the snapshot chain on `main` broke. Claude committed it in `fix/r2-review`; it chains from 0006 and its schema is identical.
+- **Leftover:** `.bob/pr-body.md` is untracked in Sam's checkout. Delete it, or add `.bob/` to `.gitignore`.
 
 ### Sam's steps
 
-- [ ] Tell Bob to start R2-A, then R2-B and R2-C.
+- [x] Tell Bob to start R2-A, then R2-B and R2-C.
 - [ ] After Claude approves the hotfix PR, merge it to `main`. Once Render redeploys, create a session on the hosted app and send a message. Both should work.
 - [ ] After Claude approves R2-B and R2-C: run the two-window check (`npm run dev` and `npm run dev:second`, both signed in, same session). Upload a doc in one window and watch it appear in the other. Then change pins in one window and watch the count update in the other.
 - [ ] Tick build step 16 in ARCHITECTURE.md (CP3), then open and merge the `docs-server` PR.
