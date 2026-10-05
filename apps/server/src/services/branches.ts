@@ -3,11 +3,12 @@ import { eq, and } from 'drizzle-orm'
 import { getDb } from '../db/index.js'
 import { branches, sessionMembers, messages } from '../db/schema.js'
 import { bus } from '../events.js'
+import { sessionDocumentRows, validDocumentIds } from './documents.js'
 import type { Branch } from '@tandem/shared'
 
 function now() { return new Date().toISOString() }
 
-function rowToBranch(row: typeof branches.$inferSelect): Branch {
+export function rowToBranch(row: typeof branches.$inferSelect): Branch {
   return {
     id: row.id,
     sessionId: row.sessionId,
@@ -18,6 +19,7 @@ function rowToBranch(row: typeof branches.$inferSelect): Branch {
     forkMessageId: row.forkMessageId ?? null,
     headMessageId: row.headMessageId ?? null,
     createdAt: row.createdAt,
+    documentIds: row.isMain ? null : row.documentIds ?? null,
   }
 }
 
@@ -27,6 +29,7 @@ export async function createBranch(
   fromMessageId: string,
   model: string,
   name?: string,
+  documentIds?: string[],
 ): Promise<Branch | null> {
   const db = getDb()
 
@@ -42,6 +45,15 @@ export async function createBranch(
     .get()
   if (!forkMsg) return null
 
+  // Without an explicit choice, a branch reads what its parent branch (the one holding the fork
+  // message) reads; forking from main means every document.
+  const parent = db.select().from(branches).where(eq(branches.id, forkMsg.branchId)).get()
+  const selection = documentIds
+    ? validDocumentIds(sessionId, documentIds)
+    : parent && !parent.isMain && parent.documentIds
+      ? validDocumentIds(sessionId, parent.documentIds)
+      : sessionDocumentRows(sessionId).map((d) => d.id)
+
   const branchId = nanoid()
   const ts = now()
   const branchName = name ?? `Branch ${ts.slice(11, 19)}`
@@ -56,6 +68,7 @@ export async function createBranch(
     forkMessageId: fromMessageId,
     headMessageId: fromMessageId, // starts at the fork point
     createdAt: ts,
+    documentIds: selection,
   }).run()
 
   const branch = rowToBranch(db.select().from(branches).where(eq(branches.id, branchId)).get()!)

@@ -1,26 +1,13 @@
 import type { FastifyPluginAsync } from 'fastify'
-import { UpdateBranchSchema } from '@tandem/shared'
+import { UpdateBranchSchema, SetBranchDocumentsSchema } from '@tandem/shared'
 import { requireAuth } from '../middleware/auth.js'
 import { eq, and } from 'drizzle-orm'
 import { getDb } from '../db/index.js'
 import { branches, sessionMembers } from '../db/schema.js'
 import { bus } from '../events.js'
 import { shareBranch } from '../services/messages.js'
-import type { Branch } from '@tandem/shared'
-
-function rowToBranch(row: typeof branches.$inferSelect): Branch {
-  return {
-    id: row.id,
-    sessionId: row.sessionId,
-    ownerId: row.ownerId ?? null,
-    isMain: Boolean(row.isMain),
-    name: row.name,
-    model: row.model,
-    forkMessageId: row.forkMessageId ?? null,
-    headMessageId: row.headMessageId ?? null,
-    createdAt: row.createdAt,
-  }
-}
+import { rowToBranch } from '../services/branches.js'
+import { setBranchDocuments } from '../services/documents.js'
 
 export const branchRoutes: FastifyPluginAsync = async (app) => {
   // PATCH /api/branches/:id
@@ -49,6 +36,20 @@ export const branchRoutes: FastifyPluginAsync = async (app) => {
 
     bus.emitSession(branch.sessionId, { type: 'branch_updated', payload: updated })
     return reply.send(updated)
+  })
+
+  // PUT /api/branches/:id/documents
+  app.put('/api/branches/:id/documents', { preHandler: requireAuth }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const body = SetBranchDocumentsSchema.safeParse(req.body)
+    if (!body.success) {
+      return reply.code(400).send({ error: { code: 'invalid_request', message: body.error.message } })
+    }
+    try {
+      return reply.send(setBranchDocuments(req.actor!, id, body.data.documentIds))
+    } catch (err: any) {
+      return reply.code(err.status ?? 500).send({ error: { code: err.code ?? 'server_error', message: err.message } })
+    }
   })
 
   // POST /api/branches/:id/share

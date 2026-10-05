@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { messages } from '../db/schema.js'
-import { buildChatContext, BRIEF_HEADER, MULTIPLAYER_PROMPT } from './context.js'
+import { buildChatContext, BRIEF_HEADER, DOCUMENT_HEADER, OTHER_DOCUMENTS_HEADER, MULTIPLAYER_PROMPT } from './context.js'
 
 type Row = typeof messages.$inferSelect
 
@@ -25,10 +25,26 @@ describe('AI context builder', () => {
 
   it('adds the brief as a second system message, and nothing when it is empty', () => {
     const rows = [msg('m1', null, { content: 'Hi' }), msg('m2', 'm1', { authorType: 'assistant', status: 'pending' })]
-    const withBrief = buildChatContext(rows, 'm2', names, 'Use Postgres.')
+    const withBrief = buildChatContext(rows, 'm2', names, { brief: 'Use Postgres.' })
     expect(withBrief[1]).toEqual({ role: 'system', content: `${BRIEF_HEADER}\n\nUse Postgres.` })
     expect(withBrief[2]).toEqual({ role: 'user', content: 'Alice: Hi' })
-    expect(buildChatContext(rows, 'm2', names, '  \n').filter((c) => c.role === 'system')).toHaveLength(1)
+    expect(buildChatContext(rows, 'm2', names, { brief: '  \n' }).filter((c) => c.role === 'system')).toHaveLength(1)
+  })
+
+  it('adds each selected document in full after the brief, then names the documents left out', () => {
+    const rows = [msg('m1', null, { content: 'Hi' }), msg('m2', 'm1', { authorType: 'assistant', status: 'pending' })]
+    const ctx = buildChatContext(rows, 'm2', names, {
+      brief: 'Frontend first.',
+      documents: [{ name: 'ARCHITECTURE.md', content: '# Arch' }, { name: 'TODO.md', content: '- [ ] UI' }],
+      otherDocumentNames: ['README.md'],
+    })
+    expect(ctx.slice(1, 5)).toEqual([
+      { role: 'system', content: `${BRIEF_HEADER}\n\nFrontend first.` },
+      { role: 'system', content: `${DOCUMENT_HEADER}: ARCHITECTURE.md\n\n# Arch` },
+      { role: 'system', content: `${DOCUMENT_HEADER}: TODO.md\n\n- [ ] UI` },
+      { role: 'system', content: `${OTHER_DOCUMENTS_HEADER} README.md` },
+    ])
+    expect(ctx[5]).toEqual({ role: 'user', content: 'Alice: Hi' })
   })
 
   it('builds context from root to head, excluding the pending assistant message', () => {

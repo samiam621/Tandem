@@ -5,7 +5,9 @@ import { z } from 'zod'
 import { resolveToken } from '../services/auth.js'
 import type { Actor } from '../services/auth.js'
 import { listSessions, getSession, getSessionBranches, updateBrief } from '../services/sessions.js'
-import { BRIEF_MAX_CHARS } from '@tandem/shared'
+import { BRIEF_MAX_CHARS, DOCUMENT_MAX_CHARS, DOCUMENT_NAME_MAX } from '@tandem/shared'
+import { listDocuments, getDocument, saveDocument } from '../services/documents.js'
+import { refreshBrief } from '../services/brief.js'
 import { getBranchMessages, postMessage, shareBranch } from '../services/messages.js'
 import { createBranch } from '../services/branches.js'
 import { listModels } from '../ai/models.js'
@@ -111,7 +113,7 @@ function buildMcpServer(actor: Actor) {
   // ─── get_branch_context ───────────────────────────────────────────────────
   server.tool(
     'get_branch_context',
-    "Get everything you need before working on a branch: the session's project brief (specs, docs, decisions; always the latest version), the branch's whole conversation from the session's start through the fork point (oldest first), who owns it and which branch it split from, and the session's other branches. Call this after being mentioned and before replying, so you are on the same page as the team.",
+    "Get everything you need before working on a branch: the brief (a summary of the main thread: direction, decisions, who is on what), the project documents this branch reads (specs such as ARCHITECTURE.md or TODO.md, in full) plus the names of the others, the branch's whole conversation from the session's start through the fork point (oldest first), who owns it and which branch it split from, and the session's other branches. Call this after being mentioned and before replying, so you are on the same page as the team.",
     {
       branchId: z.string().describe('The branch ID'),
       limit: z.number().int().min(1).max(500).default(200).describe('Max messages to return (newest kept)'),
@@ -153,7 +155,7 @@ function buildMcpServer(actor: Actor) {
   // ─── update_brief ─────────────────────────────────────────────────────────
   server.tool(
     'update_brief',
-    "Replace the session's shared project brief: the markdown document holding the team's specs, docs and decisions. Every branch's AI reads the latest brief, so use this when the team agrees on a spec or decision that every workstream should follow. Read it first with get_branch_context, edit the full text, and pass its briefUpdatedAt as baseUpdatedAt; if a teammate saved in between you get a conflict error, so read it again and reapply your change.",
+    "Replace the session's brief: the short markdown summary of the main thread (direction, decisions, who is on what) that every branch's AI reads. Use it to record a decision every workstream should know; put specs in a document instead (write_document). Read it first with get_branch_context, edit the full text, and pass its briefUpdatedAt as baseUpdatedAt; if a teammate saved in between you get a conflict error, so read it again and reapply your change. To have AI rewrite it from main's latest messages, use refresh_brief.",
     {
       sessionId: z.string().describe('The session ID'),
       content: z.string().max(BRIEF_MAX_CHARS).describe('The full new brief, in markdown'),
@@ -168,20 +170,83 @@ function buildMcpServer(actor: Actor) {
     },
   )
 
+  // ─── refresh_brief ────────────────────────────────────────────────────────
+  server.tool(
+    'refresh_brief',
+    "Have AI rewrite the session's brief from the current brief and the main thread's latest messages. Use it after an important discussion in main, so every branch picks up the new direction. Returns the session with the new brief.",
+    { sessionId: z.string().describe('The session ID') },
+    async ({ sessionId }) => {
+      try {
+        return { content: [{ type: 'text' as const, text: JSON.stringify(await refreshBrief(actor, sessionId)) }] }
+      } catch (err: unknown) {
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }] }
+      }
+    },
+  )
+
+  // ─── list_documents ───────────────────────────────────────────────────────
+  server.tool(
+    'list_documents',
+    "List the session's project documents (specs and docs such as ARCHITECTURE.md, TODO.md): id, name, size and last update. Use it to find a document that get_branch_context did not load for your branch.",
+    { sessionId: z.string().describe('The session ID') },
+    async ({ sessionId }) => {
+      try {
+        const docs = listDocuments(actor, sessionId).map(({ content, ...d }) => ({ ...d, chars: content.length }))
+        return { content: [{ type: 'text' as const, text: JSON.stringify(docs) }] }
+      } catch (err: unknown) {
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }] }
+      }
+    },
+  )
+
+  // ─── read_document ────────────────────────────────────────────────────────
+  server.tool(
+    'read_document',
+    'Read one project document in full, with its updatedAt (pass that to write_document when you edit it).',
+    { documentId: z.string().describe('The document ID') },
+    async ({ documentId }) => {
+      try {
+        return { content: [{ type: 'text' as const, text: JSON.stringify(getDocument(actor, documentId)) }] }
+      } catch (err: unknown) {
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }] }
+      }
+    },
+  )
+
+  // ─── write_document ───────────────────────────────────────────────────────
+  server.tool(
+    'write_document',
+    "Create or replace a project document by name, e.g. tick off items in TODO.md or record a spec change in ARCHITECTURE.md. Every branch that reads the document sees the new version on its next reply. To edit, read it first and pass its updatedAt as baseUpdatedAt; to create a new document, pass null. If a teammate saved in between you get a conflict error, so read it again and reapply your change.",
+    {
+      sessionId: z.string().describe('The session ID'),
+      name: z.string().min(1).max(DOCUMENT_NAME_MAX).describe('Document name, e.g. TODO.md'),
+      content: z.string().max(DOCUMENT_MAX_CHARS).describe('The full new content, in markdown'),
+      baseUpdatedAt: z.string().nullable().describe('updatedAt of the version you edited, or null to create'),
+    },
+    async ({ sessionId, name, content, baseUpdatedAt }) => {
+      try {
+        return { content: [{ type: 'text' as const, text: JSON.stringify(saveDocument(actor, sessionId, name.trim(), content, baseUpdatedAt)) }] }
+      } catch (err: unknown) {
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }] }
+      }
+    },
+  )
+
   // ─── create_branch ────────────────────────────────────────────────────────
   server.tool(
     'create_branch',
-    'Create a new branch from a specific message.',
+    "Create a new branch from a specific message. The branch's AI reads the documents in documentIds; omit it to copy the parent branch's selection (every document when branching from main).",
     {
       fromMessageId: z.string().describe('The message ID to branch from'),
       model: z.string().describe('AI model ID for this branch'),
       name: z.string().optional().describe('Optional branch name'),
+      documentIds: z.array(z.string()).optional().describe('IDs of the project documents this branch reads (see list_documents)'),
     },
-    async ({ fromMessageId, model, name }) => {
+    async ({ fromMessageId, model, name, documentIds }) => {
       const db = getDb()
       const msg = db.select().from(messages).where(eq(messages.id, fromMessageId)).get()
       if (!msg) return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'message_not_found' }) }] }
-      const branch = await createBranch(actor, msg.sessionId, fromMessageId, model, name)
+      const branch = await createBranch(actor, msg.sessionId, fromMessageId, model, name, documentIds)
       if (!branch) return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'not_found' }) }] }
       return { content: [{ type: 'text' as const, text: JSON.stringify(branch) }] }
     },

@@ -3,6 +3,7 @@ import { eq, and, inArray, isNull } from 'drizzle-orm'
 import { getDb } from '../db/index.js'
 import { sessions, sessionMembers, branches, users, apiTokens } from '../db/schema.js'
 import { bus } from '../events.js'
+import { rowToBranch } from './branches.js'
 import type { Session, Branch, User, SessionAgent } from '@tandem/shared'
 
 function now() { return new Date().toISOString() }
@@ -18,20 +19,6 @@ function rowToSession(row: typeof sessions.$inferSelect): Session {
     brief: row.brief,
     briefUpdatedAt: row.briefUpdatedAt ?? null,
     briefUpdatedBy: row.briefUpdatedBy ?? null,
-  }
-}
-
-function rowToBranch(row: typeof branches.$inferSelect): Branch {
-  return {
-    id: row.id,
-    sessionId: row.sessionId,
-    ownerId: row.ownerId ?? null,
-    isMain: Boolean(row.isMain),
-    name: row.name,
-    model: row.model,
-    forkMessageId: row.forkMessageId ?? null,
-    headMessageId: row.headMessageId ?? null,
-    createdAt: row.createdAt,
   }
 }
 
@@ -222,8 +209,9 @@ export async function listSessionAgents(
 }
 
 // ─── Project brief ────────────────────────────────────────────────────────────
-// Any member may edit. baseUpdatedAt must match the stored briefUpdatedAt so a save never
-// silently overwrites a teammate's newer version.
+// A short summary of main. Any member may edit; refreshBrief (services/brief.ts) rewrites it with AI.
+// baseUpdatedAt must match the stored briefUpdatedAt so a save never silently overwrites a
+// teammate's newer version.
 
 export function updateBrief(
   actor: { userId: string },
@@ -231,16 +219,21 @@ export function updateBrief(
   content: string,
   baseUpdatedAt: string | null,
 ): Session {
-  const db = getDb()
   if (!isSessionMember(sessionId, actor.userId)) {
     throw Object.assign(new Error('Session not found'), { code: 'not_found', status: 404 })
   }
+  return writeBrief(sessionId, content, baseUpdatedAt, actor.userId)
+}
+
+// updatedBy is a user id, or 'system' for an automatic refresh.
+export function writeBrief(sessionId: string, content: string, baseUpdatedAt: string | null, updatedBy: string): Session {
+  const db = getDb()
   // briefUpdatedAt doubles as the version, so it must strictly increase even for saves in the same millisecond.
   const ts = baseUpdatedAt && Date.parse(now()) <= Date.parse(baseUpdatedAt)
     ? new Date(Date.parse(baseUpdatedAt) + 1).toISOString()
     : now()
   const res = db.update(sessions)
-    .set({ brief: content, briefUpdatedAt: ts, briefUpdatedBy: actor.userId })
+    .set({ brief: content, briefUpdatedAt: ts, briefUpdatedBy: updatedBy })
     .where(and(
       eq(sessions.id, sessionId),
       baseUpdatedAt === null ? isNull(sessions.briefUpdatedAt) : eq(sessions.briefUpdatedAt, baseUpdatedAt),
@@ -253,7 +246,7 @@ export function updateBrief(
   const session = rowToSession(db.select().from(sessions).where(eq(sessions.id, sessionId)).get()!)
   bus.emitSession(sessionId, {
     type: 'brief_updated',
-    payload: { sessionId, brief: session.brief, briefUpdatedAt: ts, briefUpdatedBy: actor.userId },
+    payload: { sessionId, brief: session.brief, briefUpdatedAt: ts, briefUpdatedBy: updatedBy },
   })
   return session
 }

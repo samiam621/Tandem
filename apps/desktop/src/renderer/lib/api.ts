@@ -88,6 +88,22 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ content, baseUpdatedAt }),
       }),
+    refreshBrief: (id: string) =>
+      request<import('@tandem/shared').Session>(`/api/sessions/${id}/brief/refresh`, { method: 'POST' }),
+  },
+
+  documents: {
+    list: (sessionId: string) =>
+      request<import('@tandem/shared').SessionDocument[]>(`/api/sessions/${sessionId}/documents`),
+    get: (documentId: string) =>
+      request<import('@tandem/shared').SessionDocument>(`/api/documents/${documentId}`),
+    save: (sessionId: string, name: string, content: string, baseUpdatedAt: string | null) =>
+      request<import('@tandem/shared').SessionDocument>(`/api/sessions/${sessionId}/documents`, {
+        method: 'PUT',
+        body: JSON.stringify({ name, content, baseUpdatedAt }),
+      }),
+    delete: (documentId: string) =>
+      request<{ ok: boolean }>(`/api/documents/${documentId}`, { method: 'DELETE' }),
   },
 
   models: {
@@ -110,10 +126,15 @@ export const api = {
         method: 'PATCH',
         body: JSON.stringify(data),
       }),
-    create: (sessionId: string, fromMessageId: string, model: string, name?: string) =>
+    create: (sessionId: string, fromMessageId: string, model: string, name?: string, documentIds?: string[]) =>
       request<import('@tandem/shared').Branch>(`/api/sessions/${sessionId}/branches`, {
         method: 'POST',
-        body: JSON.stringify({ fromMessageId, model, name }),
+        body: JSON.stringify({ fromMessageId, model, name, documentIds }),
+      }),
+    setDocuments: (branchId: string, documentIds: string[]) =>
+      request<import('@tandem/shared').Branch>(`/api/branches/${branchId}/documents`, {
+        method: 'PUT',
+        body: JSON.stringify({ documentIds }),
       }),
     share: (branchId: string) =>
       request<import('@tandem/shared').Message>(`/api/branches/${branchId}/share`, {

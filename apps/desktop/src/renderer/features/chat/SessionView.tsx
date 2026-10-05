@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react'
-import type { Session, Branch, Message, User, SessionAgent } from '@tandem/shared'
+import type { Session, Branch, Message, User, SessionAgent, SessionDocument } from '@tandem/shared'
 import { api } from '../../lib/api'
 import { useAuth } from '../../app/AuthContext'
 import { useWebSocket } from '../../lib/useWebSocket'
 import { MessageTreePanel } from './MessageTreePanel'
 import { MentionMenu, buildMentionItems, highlightMentions } from './MentionMenu'
 import { BriefPanel, type BriefState } from './BriefPanel'
+import { DocumentPanel } from './DocumentPanel'
 
 interface Props {
   session: Session
@@ -43,6 +44,12 @@ export function SessionView({ session, onBack }: Props) {
     briefUpdatedBy: session.briefUpdatedBy ?? null,
   })
   const [briefOpen, setBriefOpen] = useState(false)
+  // ── Documents (specs in main; each branch reads its selection) ──────────────
+  const [documents, setDocuments] = useState<SessionDocument[]>([])
+  const [openDocId, setOpenDocId] = useState<string | null>(null) // 'new' while creating
+  const [docsError, setDocsError] = useState<string | null>(null)
+  const [branchDocIds, setBranchDocIds] = useState<string[]>([]) // selection in the branch dialog
+  const uploadRef = useRef<HTMLInputElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<HTMLInputElement>(null)
 
@@ -129,7 +136,8 @@ export function SessionView({ session, onBack }: Props) {
         break
       case 'branch_created':
         if (event.payload.sessionId === session.id) {
-          setBranches((prev) => [...prev, event.payload])
+          // Our own new branch also arrives in the REST response; keep one copy.
+          setBranches((prev) => (prev.some((b) => b.id === event.payload.id) ? prev : [...prev, event.payload]))
           // Pre-seed an empty entry so the tree node appears immediately
           setAllMessages((prev) => {
             if (prev.has(event.payload.id)) return prev
@@ -146,6 +154,19 @@ export function SessionView({ session, onBack }: Props) {
         if (event.payload.sessionId === session.id) {
           const { brief, briefUpdatedAt, briefUpdatedBy } = event.payload
           setBrief({ brief, briefUpdatedAt, briefUpdatedBy })
+        }
+        break
+      case 'document_updated':
+        if (event.payload.sessionId === session.id) {
+          const doc = event.payload
+          setDocuments((prev) => upsertDocument(prev, doc))
+        }
+        break
+      case 'document_deleted':
+        if (event.payload.sessionId === session.id) {
+          const { documentId } = event.payload
+          setDocuments((prev) => prev.filter((d) => d.id !== documentId))
+          setOpenDocId((cur) => (cur === documentId ? null : cur))
         }
         break
       case 'typing':
@@ -196,6 +217,7 @@ export function SessionView({ session, onBack }: Props) {
       const { brief, briefUpdatedAt, briefUpdatedBy } = data.session
       setBrief({ brief, briefUpdatedAt, briefUpdatedBy })
     })
+    api.documents.list(session.id).then(setDocuments).catch(() => {})
     fetchAgents()
   }, [session.id, fetchAgents])
 
@@ -355,14 +377,55 @@ export function SessionView({ session, onBack }: Props) {
     if (!branchingFromMsg) return
     setBranchError(null)
     try {
-      const branch = await api.branches.create(session.id, branchingFromMsg.id, branchModel, branchName || undefined)
-      setBranches((prev) => [...prev, branch])
+      const branch = await api.branches.create(session.id, branchingFromMsg.id, branchModel, branchName || undefined, branchDocIds)
+      setBranches((prev) => (prev.some((b) => b.id === branch.id) ? prev : [...prev, branch]))
       setActiveBranchId(branch.id)
       setBranchingFromMsg(null)
       setBranchName('')
     } catch (err: any) {
       setBranchError(err?.message ?? 'Failed to create branch')
     }
+  }
+
+  // The documents a branch's AI reads: all of them in main (or a branch from before documents existed).
+  const readsDocument = (b: Branch | null, docId: string) => !b || b.isMain || b.documentIds === null || b.documentIds.includes(docId)
+
+  // A new branch starts with what its parent branch (the one holding the fork message) reads.
+  useEffect(() => {
+    if (!branchingFromMsg) return
+    const parent = branches.find((b) => b.id === branchingFromMsg.branchId) ?? null
+    setBranchDocIds(documents.filter((d) => readsDocument(parent, d.id)).map((d) => d.id))
+    // Only when the dialog opens; later document changes should not reset the user's ticks.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [branchingFromMsg])
+
+  async function toggleBranchDocument(docId: string) {
+    if (!activeBranch || activeBranch.isMain || activeBranch.ownerId !== user?.id) return
+    const current = documents.filter((d) => readsDocument(activeBranch, d.id)).map((d) => d.id)
+    const next = current.includes(docId) ? current.filter((id) => id !== docId) : [...current, docId]
+    setDocsError(null)
+    try {
+      const updated = await api.branches.setDocuments(activeBranch.id, next)
+      setBranches((prev) => prev.map((b) => (b.id === updated.id ? updated : b)))
+    } catch (err: any) {
+      setDocsError(err?.message ?? 'Failed to update this branch’s documents')
+    }
+  }
+
+  // Each file becomes a document named after it; a file with an existing document's name replaces it.
+  async function handleUpload(files: FileList | null) {
+    if (!files?.length) return
+    setDocsError(null)
+    for (const file of Array.from(files)) {
+      try {
+        const existing = documents.find((d) => d.name === file.name)
+        const doc = await api.documents.save(session.id, file.name, await file.text(), existing?.updatedAt ?? null)
+        setDocuments((prev) => upsertDocument(prev, doc))
+      } catch (err: any) {
+        setDocsError(`${file.name}: ${err?.message ?? 'upload failed'}`)
+      }
+    }
+    if (uploadRef.current) uploadRef.current.value = ''
   }
 
   // Derive the set of branch IDs that already have a share card posted in any branch
@@ -444,16 +507,64 @@ export function SessionView({ session, onBack }: Props) {
             </button>
           </div>
 
-          {/* Project brief — the spec every branch's AI reads */}
+          {/* Brief — the summary of main every branch's AI reads */}
           <button
             onClick={() => setBriefOpen(true)}
-            className="mx-2 my-2 rounded-lg border border-gray-800 px-2.5 py-2 text-left hover:bg-gray-800"
+            className="mx-2 mt-2 rounded-lg border border-gray-800 px-2.5 py-2 text-left hover:bg-gray-800"
           >
-            <div className="text-xs font-semibold text-gray-300">Project brief</div>
+            <div className="text-xs font-semibold text-gray-300">Brief</div>
             <div className="text-[10px] text-gray-500 truncate">
-              {brief.brief ? brief.brief.split('\n').find((l) => l.trim()) : 'Add specs every branch sees'}
+              {brief.brief ? brief.brief.split('\n').find((l) => l.trim()) : 'Summary of main every branch reads'}
             </div>
           </button>
+
+          {/* Documents — specs in main; a branch's AI reads the ticked ones */}
+          <div className="px-3 py-2 border-b border-gray-800 max-h-44 overflow-y-auto">
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Documents</p>
+              <span className="flex gap-1">
+                <button onClick={() => setOpenDocId('new')} className="text-xs text-gray-400 hover:text-gray-200 rounded px-1 hover:bg-gray-800">New</button>
+                <button onClick={() => uploadRef.current?.click()} className="text-xs text-gray-400 hover:text-gray-200 rounded px-1 hover:bg-gray-800">Upload</button>
+                <input
+                  ref={uploadRef}
+                  type="file"
+                  multiple
+                  accept=".md,.markdown,.txt,.json,.yaml,.yml"
+                  className="hidden"
+                  onChange={(e) => handleUpload(e.target.files)}
+                />
+              </span>
+            </div>
+            {documents.length === 0 ? (
+              <p className="text-[10px] text-gray-600 leading-snug">Add specs like ARCHITECTURE.md or TODO.md. Branches choose which ones their AI reads.</p>
+            ) : (
+              <>
+                {activeBranch && !activeBranch.isMain && (
+                  <p className="text-[10px] text-gray-600 mb-0.5">Ticked: read in {activeBranch.name}</p>
+                )}
+                <ul className="space-y-0.5">
+                  {documents.map((d) => (
+                    <li key={d.id} className="flex items-center gap-1.5 text-xs">
+                      {activeBranch && !activeBranch.isMain && (
+                        <input
+                          type="checkbox"
+                          checked={readsDocument(activeBranch, d.id)}
+                          disabled={activeBranch.ownerId !== user?.id}
+                          onChange={() => toggleBranchDocument(d.id)}
+                          title={activeBranch.ownerId === user?.id ? 'Include in this branch’s AI context' : 'Only the branch owner can change this'}
+                          className="shrink-0 accent-blue-500"
+                        />
+                      )}
+                      <button onClick={() => setOpenDocId(d.id)} className="truncate text-left text-gray-300 hover:text-white">
+                        {d.name}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            {docsError && <p className="mt-1 text-xs text-red-400 break-words">{docsError}</p>}
+          </div>
 
           {/* Members — capped height so long lists don't push branches off screen */}
           <div className="px-3 py-2 border-b border-gray-800 max-h-36 overflow-y-auto">
@@ -563,6 +674,22 @@ export function SessionView({ session, onBack }: Props) {
                 <button type="submit" className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs hover:bg-blue-700">Branch</button>
                 <button type="button" onClick={() => { setBranchingFromMsg(null); setBranchError(null) }} className="rounded-lg bg-gray-700 px-3 py-1.5 text-xs hover:bg-gray-600">Cancel</button>
               </div>
+              {documents.length > 0 && (
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-400">
+                  <span className="text-gray-500">This branch's AI reads:</span>
+                  {documents.map((d) => (
+                    <label key={d.id} className="flex items-center gap-1 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={branchDocIds.includes(d.id)}
+                        onChange={() => setBranchDocIds((prev) => (prev.includes(d.id) ? prev.filter((id) => id !== d.id) : [...prev, d.id]))}
+                        className="accent-blue-500"
+                      />
+                      {d.name}
+                    </label>
+                  ))}
+                </div>
+              )}
             </form>
           )}
 
@@ -652,8 +779,31 @@ export function SessionView({ session, onBack }: Props) {
           onClose={() => setBriefOpen(false)}
         />
       )}
+
+      {openDocId && (
+        <DocumentPanel
+          key={openDocId}
+          sessionId={session.id}
+          doc={documents.find((d) => d.id === openDocId) ?? null}
+          members={members}
+          onSaved={(doc) => {
+            setDocuments((prev) => upsertDocument(prev, doc))
+            setOpenDocId(doc.id)
+          }}
+          onDeleted={(id) => {
+            setDocuments((prev) => prev.filter((d) => d.id !== id))
+            setOpenDocId(null)
+          }}
+          onClose={() => setOpenDocId(null)}
+        />
+      )}
     </div>
   )
+}
+
+function upsertDocument(docs: SessionDocument[], doc: SessionDocument): SessionDocument[] {
+  const rest = docs.filter((d) => d.id !== doc.id)
+  return [...rest, doc].sort((a, b) => (a.name < b.name ? -1 : 1)) // same order as the server (by name)
 }
 
 function MessageRow({

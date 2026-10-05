@@ -9,6 +9,7 @@ import { branchRoutes } from '../routes/branches.js'
 import { messageRoutes } from '../routes/messages.js'
 import { modelsRoute } from '../routes/models.js'
 import { tokenRoutes } from '../routes/tokens.js'
+import { documentRoutes } from '../routes/documents.js'
 import { recoverStaleMessages } from '../services/messages.js'
 import { resolveToken } from '../services/auth.js'
 import { listMentions, waitForMentions, getBranchContext, setWorking } from '../services/agents.js'
@@ -29,7 +30,9 @@ function buildTestDb() {
     CREATE TABLE users (id TEXT PRIMARY KEY, kind TEXT NOT NULL, display_name TEXT NOT NULL, github_id TEXT, device_id TEXT, avatar_url TEXT, created_at TEXT NOT NULL);
     CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, owner_id TEXT NOT NULL, default_model TEXT NOT NULL, invite_code TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, brief TEXT NOT NULL DEFAULT '', brief_updated_at TEXT, brief_updated_by TEXT);
     CREATE TABLE session_members (session_id TEXT NOT NULL, user_id TEXT NOT NULL, joined_at TEXT NOT NULL, last_seen_at TEXT NOT NULL);
-    CREATE TABLE branches (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, owner_id TEXT, is_main INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL, model TEXT NOT NULL, fork_message_id TEXT, head_message_id TEXT, created_at TEXT NOT NULL);
+    CREATE TABLE branches (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, owner_id TEXT, is_main INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL, model TEXT NOT NULL, fork_message_id TEXT, head_message_id TEXT, created_at TEXT NOT NULL, document_ids TEXT);
+    CREATE TABLE session_documents (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, name TEXT NOT NULL, content TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL);
+    CREATE UNIQUE INDEX session_documents_session_name ON session_documents (session_id, name);
     CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, branch_id TEXT NOT NULL, parent_id TEXT, author_type TEXT NOT NULL, author_id TEXT NOT NULL, agent_label TEXT, shared_from_branch_id TEXT, model TEXT, content TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL);
     CREATE TABLE message_mentions (message_id TEXT NOT NULL, token_id TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE api_tokens (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, kind TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, label TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT);
@@ -52,6 +55,7 @@ async function buildApp() {
   await app.register(messageRoutes)
   await app.register(modelsRoute)
   await app.register(tokenRoutes)
+  await app.register(documentRoutes)
   recoverStaleMessages()
   return app
 }
@@ -347,6 +351,95 @@ describe('REST integration', () => {
     const ctx = (await getBranchContext(claude, bugfixBranchId, 200))!
     expect(ctx.brief).toBe('Use Postgres 16.')
     expect(ctx.briefUpdatedAt).not.toBe(v1)
+    bus.offSession(onEvent)
+  })
+
+  it('POST /api/sessions/:id/brief/refresh rewrites the brief from main (members only)', async () => {
+    const refresh = (tok: string) =>
+      app.inject({ method: 'POST', url: `/api/sessions/${sessionId}/brief/refresh`, headers: { authorization: `Bearer ${tok}` } })
+    const res = await refresh(user2Token)
+    expect(res.statusCode).toBe(200)
+    expect(res.json().brief).toMatch(/Dev mode/) // no OPENROUTER_API_KEY in tests: the summarizer's stub
+    expect(res.json().briefUpdatedBy).not.toBe(userId)
+    const outsider = (await app.inject({
+      method: 'POST', url: '/api/auth/guest', payload: { displayName: 'Eve', deviceId: 'device-eve-refresh' },
+    })).json().token
+    expect((await refresh(outsider)).statusCode).toBe(404)
+  })
+
+  it('documents: members create and edit with conflict checks; branches read their selection live', async () => {
+    const auth = (tok: string) => ({ authorization: `Bearer ${tok}` })
+    const put = (tok: string, payload: object) =>
+      app.inject({ method: 'PUT', url: `/api/sessions/${sessionId}/documents`, headers: auth(tok), payload })
+    const seen: any[] = []
+    const onEvent = ({ event }: any) => event.type.startsWith('document_') && seen.push(event)
+    bus.onSession(onEvent)
+
+    const arch = (await put(token, { name: 'ARCHITECTURE.md', content: '# Arch v1', baseUpdatedAt: null })).json()
+    const todo = (await put(user2Token, { name: 'TODO.md', content: '- [ ] UI', baseUpdatedAt: null })).json()
+    expect(arch).toMatchObject({ name: 'ARCHITECTURE.md', content: '# Arch v1', updatedBy: userId })
+    expect(seen.at(-1)).toMatchObject({ type: 'document_updated', payload: { id: todo.id } })
+    // Creating a taken name, or saving from an outdated version, is refused.
+    expect((await put(user2Token, { name: 'ARCHITECTURE.md', content: 'x', baseUpdatedAt: null })).statusCode).toBe(409)
+    const v2 = (await put(user2Token, { name: 'ARCHITECTURE.md', content: '# Arch v2', baseUpdatedAt: arch.updatedAt })).json()
+    expect((await put(token, { name: 'ARCHITECTURE.md', content: 'stale', baseUpdatedAt: arch.updatedAt })).statusCode).toBe(409)
+    expect((await put(token, { name: 'big.md', content: 'x'.repeat(60001), baseUpdatedAt: null })).statusCode).toBe(400)
+
+    const list = (await app.inject({ method: 'GET', url: `/api/sessions/${sessionId}/documents`, headers: auth(token) })).json()
+    expect(list.map((d: any) => d.name)).toEqual(['ARCHITECTURE.md', 'TODO.md'])
+
+    // A branch from main reads every document by default; a chosen selection limits it.
+    const mainMsgs = (await app.inject({ method: 'GET', url: `/api/branches/${mainBranchId}/messages`, headers: auth(token) })).json()
+    const fromMessageId = mainMsgs.at(-1).id
+    const frontend = (await app.inject({
+      method: 'POST', url: `/api/sessions/${sessionId}/branches`, headers: auth(token),
+      payload: { fromMessageId, model: 'test-model', name: 'frontend', documentIds: [todo.id, 'bogus'] },
+    })).json()
+    expect(frontend.documentIds).toEqual([todo.id])
+    const everything = (await app.inject({
+      method: 'POST', url: `/api/sessions/${sessionId}/branches`, headers: auth(token),
+      payload: { fromMessageId, model: 'test-model', name: 'backend' },
+    })).json()
+    expect(everything.documentIds.sort()).toEqual([arch.id, todo.id].sort())
+
+    // A sub-branch of frontend copies frontend's selection.
+    await app.inject({
+      method: 'POST', url: `/api/branches/${frontend.id}/messages`, headers: auth(token), payload: { content: 'login form next', triggerAi: false },
+    })
+    const frontMsgs = (await app.inject({ method: 'GET', url: `/api/branches/${frontend.id}/messages`, headers: auth(token) })).json()
+    const login = (await app.inject({
+      method: 'POST', url: `/api/sessions/${sessionId}/branches`, headers: auth(token),
+      payload: { fromMessageId: frontMsgs.at(-1).id, model: 'test-model', name: 'login' },
+    })).json()
+    expect(login.documentIds).toEqual([todo.id])
+
+    const claude = (await resolveToken(claudeToken))!
+    let ctx = (await getBranchContext(claude, frontend.id, 200))!
+    expect(ctx.documents.map((d) => d.name)).toEqual(['TODO.md'])
+    expect(ctx.otherDocuments.map((d) => d.name)).toEqual(['ARCHITECTURE.md'])
+    expect((await getBranchContext(claude, mainBranchId, 200))!.documents.map((d) => d.name)).toEqual(['ARCHITECTURE.md', 'TODO.md'])
+
+    // Only the owner changes a branch's selection; main has none to change.
+    const setDocs = (tok: string, branchId: string, documentIds: string[]) =>
+      app.inject({ method: 'PUT', url: `/api/branches/${branchId}/documents`, headers: auth(tok), payload: { documentIds } })
+    expect((await setDocs(user2Token, frontend.id, [arch.id])).statusCode).toBe(403)
+    expect((await setDocs(token, mainBranchId, [arch.id])).statusCode).toBe(400)
+    const updated = await setDocs(token, frontend.id, [arch.id, todo.id])
+    expect(updated.json().documentIds).toEqual([arch.id, todo.id])
+    ctx = (await getBranchContext(claude, frontend.id, 200))!
+    expect(ctx.documents.find((d) => d.name === 'ARCHITECTURE.md')!.content).toBe('# Arch v2') // always the latest
+
+    // Deleting a document removes it from every branch; outsiders see nothing.
+    expect((await app.inject({ method: 'DELETE', url: `/api/documents/${todo.id}`, headers: auth(user2Token) })).statusCode).toBe(200)
+    expect(seen.at(-1)).toEqual({ type: 'document_deleted', payload: { sessionId, documentId: todo.id } })
+    ctx = (await getBranchContext(claude, frontend.id, 200))!
+    expect(ctx.documents.map((d) => d.name)).toEqual(['ARCHITECTURE.md'])
+    const outsider = (await app.inject({
+      method: 'POST', url: '/api/auth/guest', payload: { displayName: 'Eve', deviceId: 'device-eve-docs' },
+    })).json().token
+    expect((await app.inject({ method: 'GET', url: `/api/documents/${v2.id}`, headers: auth(outsider) })).statusCode).toBe(404)
+    expect((await app.inject({ method: 'GET', url: `/api/sessions/${sessionId}/documents`, headers: auth(outsider) })).statusCode).toBe(404)
+    expect((await put(outsider, { name: 'evil.md', content: 'x', baseUpdatedAt: null })).statusCode).toBe(404)
     bus.offSession(onEvent)
   })
 

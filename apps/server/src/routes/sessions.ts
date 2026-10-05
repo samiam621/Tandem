@@ -11,6 +11,7 @@ import {
   updateBrief,
 } from '../services/sessions.js'
 import { createBranch, getSessionTree } from '../services/branches.js'
+import { refreshBrief } from '../services/brief.js'
 
 export const sessionRoutes: FastifyPluginAsync = async (app) => {
   // POST /api/sessions
@@ -63,6 +64,16 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
     }
   })
 
+  // POST /api/sessions/:id/brief/refresh
+  app.post('/api/sessions/:id/brief/refresh', { preHandler: requireAuth }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    try {
+      return reply.send(await refreshBrief(req.actor!, id))
+    } catch (err: any) {
+      return reply.code(err.status ?? 500).send({ error: { code: err.code ?? 'server_error', message: err.message } })
+    }
+  })
+
   // GET /api/sessions/:id/branches
   app.get('/api/sessions/:id/branches', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string }
@@ -86,7 +97,7 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
     if (!body.success) {
       return reply.code(400).send({ error: { code: 'invalid_request', message: body.error.message } })
     }
-    const result = await createBranch(req.actor!, id, body.data.fromMessageId, body.data.model, body.data.name)
+    const result = await createBranch(req.actor!, id, body.data.fromMessageId, body.data.model, body.data.name, body.data.documentIds)
     if (!result) return reply.code(404).send({ error: { code: 'not_found', message: 'Session or message not found' } })
     return reply.code(201).send(result)
   })

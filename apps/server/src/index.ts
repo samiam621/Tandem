@@ -11,6 +11,7 @@ import { messageRoutes } from './routes/messages.js'
 import { recoverStaleMessages } from './services/messages.js'
 import { wsHandler } from './ws/handler.js'
 import { tokenRoutes } from './routes/tokens.js'
+import { documentRoutes } from './routes/documents.js'
 import { mcpHandler } from './mcp/handler.js'
 
 // A deployed server (non-localhost PUBLIC_URL) must not hash tokens with the known dev secret.
@@ -38,6 +39,7 @@ await server.register(branchRoutes)
 await server.register(messageRoutes)
 await server.register(wsHandler)
 await server.register(tokenRoutes)
+await server.register(documentRoutes)
 await server.register(mcpHandler)
 
 // Run migrations on startup, before anything touches the tables

@@ -5,11 +5,12 @@ import { messages, branches, users, sessions } from '../db/schema.js'
 import { bus } from '../events.js'
 import { assertModelAllowed } from './models.js'
 import { buildChatContext } from './context.js'
+import { documentsForBranch } from '../services/documents.js'
 
 // ─── Context builder ──────────────────────────────────────────────────────────
-// Loads the session's messages, speaker names and brief; the pure mapping lives in context.ts.
+// Loads the session's messages, speaker names, brief and the branch's documents; the pure mapping lives in context.ts.
 
-function buildContext(sessionId: string, pendingMsgId: string) {
+function buildContext(sessionId: string, branch: typeof branches.$inferSelect, pendingMsgId: string) {
   const db = getDb()
   const rows = db.select().from(messages).where(eq(messages.sessionId, sessionId)).all()
   const authorIds = [...new Set(rows.map((m) => m.authorId))]
@@ -18,7 +19,13 @@ function buildContext(sessionId: string, pendingMsgId: string) {
       .map((u) => [u.id, u.name]),
   )
   const brief = db.select({ brief: sessions.brief }).from(sessions).where(eq(sessions.id, sessionId)).get()?.brief ?? ''
-  return buildChatContext(rows, pendingMsgId, nameById, brief)
+  const { selected, others } = documentsForBranch(branch)
+  return buildChatContext(rows, pendingMsgId, nameById, { brief, documents: selected, otherDocumentNames: others.map((d) => d.name) })
+}
+
+// Whether a real model is configured. Without a key, replies and summaries are dev stubs.
+export function aiConfigured(): boolean {
+  return Boolean(process.env.OPENROUTER_API_KEY)
 }
 
 // ─── Summarize (Share to main) ────────────────────────────────────────────────
@@ -27,8 +34,15 @@ const SUMMARY_PROMPT = `You summarize a side branch of a team chat so teammates 
 Write a short markdown summary: what was worked on, decisions and results, and open questions.
 Use bullet points and stay under 150 words. Do not invent details that are not in the transcript.`
 
+export const BRIEF_PROMPT = `You maintain the brief for the main thread of a team chat. The main thread is where the team plans;
+side branches are workstreams (frontend, backend, a feature) whose AI reads this brief to stay in sync with main.
+You get the current brief, the team's branches, the names of the shared documents, and the latest main-thread messages.
+Write the updated brief in markdown: the current direction, decisions made, who is working on what (by branch), and open questions.
+Keep points from the current brief that are still true. Do not copy the documents; refer to them by name.
+Stay under 250 words. Do not invent details that are not in the input.`
+
 // One-shot (non-streaming) summary of a transcript, using the branch's model.
-export async function summarize(model: string, transcript: string): Promise<string> {
+export async function summarize(model: string, transcript: string, prompt = SUMMARY_PROMPT): Promise<string> {
   const apiKey = process.env.OPENROUTER_API_KEY
   if (!apiKey) return `[Dev mode: no OPENROUTER_API_KEY set. Model: ${model}. Summary of ${transcript.split('\n').length} messages would appear here.]`
 
@@ -36,7 +50,7 @@ export async function summarize(model: string, transcript: string): Promise<stri
   const client = new OpenAI({ apiKey, baseURL: 'https://openrouter.ai/api/v1', defaultHeaders: { 'X-Title': 'Tandem' } })
   const res = await client.chat.completions.create({
     model,
-    messages: [{ role: 'system', content: SUMMARY_PROMPT }, { role: 'user', content: transcript }],
+    messages: [{ role: 'system', content: prompt }, { role: 'user', content: transcript }],
   })
   return res.choices[0]?.message?.content?.trim() || '(The model returned an empty summary.)'
 }
@@ -56,7 +70,7 @@ export async function generateReply(branchId: string, pendingMsgId: string, sess
   db.update(messages).set({ status: 'streaming' }).where(eq(messages.id, pendingMsgId)).run()
 
   try {
-    const context = buildContext(sessionId, pendingMsgId)
+    const context = buildContext(sessionId, branch, pendingMsgId)
 
     const apiKey = process.env.OPENROUTER_API_KEY
     if (!apiKey) {

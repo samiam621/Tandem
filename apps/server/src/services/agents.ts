@@ -5,6 +5,7 @@ import { bus } from '../events.js'
 import type { SessionEvent } from '../events.js'
 import { getBranchMessages } from './messages.js'
 import { getSessionBranches } from './sessions.js'
+import { documentsForBranch } from './documents.js'
 import type { Actor } from './auth.js'
 import type { McpBranchContext, McpMention } from '@tandem/shared'
 
@@ -59,8 +60,9 @@ export function waitForMentions(actor: Actor, since: string, timeoutMs: number):
 
 // ─── Branch context ───────────────────────────────────────────────────────────
 
-// Everything an agent needs before working on a branch: the root-to-head path (including the
-// history inherited from the fork), who owns it, and the session's other branches.
+// Everything an agent needs before working on a branch: the brief, the documents the branch reads,
+// the root-to-head path (including the history inherited from the fork), who owns it, and the
+// session's other branches.
 export async function getBranchContext(actor: Actor, branchId: string, limit: number): Promise<McpBranchContext | null> {
   const path = await getBranchMessages(actor, branchId) // also checks membership
   if (!path) return null
@@ -82,11 +84,14 @@ export async function getBranchContext(actor: Actor, branchId: string, limit: nu
   const ownerName = (ownerId: string | null) => (ownerId ? nameById.get(ownerId) ?? null : null)
   const branchName = new Map(sessionBranches.map((b) => [b.id, b.name]))
   const fork = branch.forkMessageId ? path.find((m) => m.id === branch.forkMessageId) : undefined
+  const docs = documentsForBranch(branch)
 
   return {
     session,
     brief,
     briefUpdatedAt,
+    documents: docs.selected,
+    otherDocuments: docs.others.map(({ id, name, updatedAt }) => ({ id, name, updatedAt })),
     branch: { ...branch, ownerDisplayName: ownerName(branch.ownerId) },
     forkedFrom: fork ? { branchId: fork.branchId, branchName: branchName.get(fork.branchId) ?? '', messageId: fork.id } : null,
     messages: path.slice(-limit).map((m) => ({

@@ -7,7 +7,15 @@ export const MULTIPLAYER_PROMPT = `You are the AI assistant in a shared team cha
 Each non-assistant message starts with the speaker's name, as "Name: message". Use names to tell speakers apart and address people by name when useful.
 Do not start your own replies with a name prefix.`
 
-export const BRIEF_HEADER = 'Project brief (shared by every branch; the current source of truth for specs and decisions):'
+export const BRIEF_HEADER = 'Brief: the current summary of the main thread, where the team plans (direction, decisions, who is on what):'
+export const DOCUMENT_HEADER = 'Project document'
+export const OTHER_DOCUMENTS_HEADER = 'Other project documents exist but are not loaded in this branch (ask a teammate, or an agent can read them):'
+
+export interface SharedContext {
+  brief?: string
+  documents?: { name: string; content: string }[] // the branch's selected documents, read in full
+  otherDocumentNames?: string[]
+}
 
 // Walks parent_id links from headMessageId up to the root and returns the path oldest first.
 // This is what scopes a branch to its fork history plus its own messages: siblings are never reached.
@@ -24,13 +32,13 @@ export function pathToHead(rows: MessageRow[], headMessageId: string): MessageRo
 
 // Maps the path to the pending assistant message into chat messages. The pending message itself and
 // any pending/error messages are skipped. User and agent messages are prefixed with the speaker's name
-// (an agent's token label wins over its user's display name). The session brief is passed in live,
-// not taken from the path, so a branch forked before a brief edit still sees the latest version.
+// (an agent's token label wins over its user's display name). The brief and documents are passed in
+// live, not taken from the path, so a branch forked before an edit still sees the latest version.
 export function buildChatContext(
   rows: MessageRow[],
   pendingMessageId: string,
   nameById: Map<string, string>,
-  brief = '',
+  shared: SharedContext = {},
 ): ChatMsg[] {
   const turns = pathToHead(rows, pendingMessageId)
     .filter((m) => m.id !== pendingMessageId && m.status === 'done')
@@ -40,6 +48,12 @@ export function buildChatContext(
       return { role: 'user', content: `${name}: ${m.content}` }
     })
   const system: ChatMsg[] = [{ role: 'system', content: MULTIPLAYER_PROMPT }]
-  if (brief.trim()) system.push({ role: 'system', content: `${BRIEF_HEADER}\n\n${brief}` })
+  if (shared.brief?.trim()) system.push({ role: 'system', content: `${BRIEF_HEADER}\n\n${shared.brief}` })
+  for (const doc of shared.documents ?? []) {
+    system.push({ role: 'system', content: `${DOCUMENT_HEADER}: ${doc.name}\n\n${doc.content}` })
+  }
+  if (shared.otherDocumentNames?.length) {
+    system.push({ role: 'system', content: `${OTHER_DOCUMENTS_HEADER} ${shared.otherDocumentNames.join(', ')}` })
+  }
   return [...system, ...turns]
 }

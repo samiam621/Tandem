@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core'
+import { sqliteTable, text, integer, uniqueIndex } from 'drizzle-orm/sqlite-core'
 import { pgTable, varchar, boolean, timestamp } from 'drizzle-orm/pg-core'
 
 // We use SQLite for local dev and Postgres in prod.
@@ -44,7 +44,18 @@ export const branches = sqliteTable('branches', {
   forkMessageId: text('fork_message_id'),
   headMessageId: text('head_message_id'),
   createdAt: text('created_at').notNull(),
+  documentIds: text('document_ids', { mode: 'json' }).$type<string[]>(), // null on main = all documents
 })
+
+export const sessionDocuments = sqliteTable('session_documents', {
+  id: text('id').primaryKey(),
+  sessionId: text('session_id').notNull(),
+  name: text('name').notNull(),
+  content: text('content').notNull().default(''),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+  updatedBy: text('updated_by').notNull(),
+}, (t) => [uniqueIndex('session_documents_session_name').on(t.sessionId, t.name)])
 
 export const messages = sqliteTable('messages', {
   id: text('id').primaryKey(),

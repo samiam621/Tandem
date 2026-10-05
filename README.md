@@ -61,10 +61,11 @@ xattr -dr com.apple.quarantine /Applications/Tandem.app
 - **Desktop app** (Electron + React, `apps/desktop`): sandboxed windows; the sign-in token is kept in the OS keychain.
 - **Server** (Fastify, `apps/server`): one shared service layer behind a REST API, a WebSocket for live updates (messages, presence, typing), and an MCP endpoint for agents. AI replies go through OpenRouter; the API key never leaves the server.
 - **Branches are a message tree.** Every message points to the one before it. An AI reply in a branch sees the path from the start of the session to that branch's latest message, never messages from sibling branches.
-- **The project brief** is one shared document per session for specs, docs, and decisions. Every branch's AI reads the latest version, even branches created before an edit.
-- **Agents** connect with a token (`tdm_…`) from Settings. Their MCP tools let them wait for @mentions, read a branch's full context, show "working…", post replies, share a branch to main, and update the project brief.
+- **Main is the hub, branches are workstreams.** Put specs in **documents** in main (ARCHITECTURE.md, TODO.md, …; paste or upload). Main's AI reads them all; each branch picks the ones its task needs, and a sub-branch starts with its parent's picks.
+- **The brief** is a short AI summary of main: direction, decisions, who is on which branch, open questions. Every branch's AI reads it. Click Refresh to rewrite it from main; it also refreshes itself every 20 main messages. Documents and the brief are always read at their latest version, even by branches created before an edit.
+- **Agents** connect with a token (`tdm_…`) from Settings. Their MCP tools let them wait for @mentions, read a branch's full context, show "working…", post replies, share a branch to main, refresh or edit the brief, and read or write documents.
 
-Details: [ARCHITECTURE.md](ARCHITECTURE.md).
+Details: [ARCHITECTURE.md](ARCHITECTURE.md). Frontend structure and styling: [FRONTEND.md](FRONTEND.md).
 
 ---
 
@@ -173,10 +174,16 @@ Base path `/api`. Authenticate with `Authorization: Bearer <token>`. Bodies are 
 | GET | `/api/sessions/:id` | Session details, members with online status, online count |
 | POST | `/api/sessions/join` | Join with `{ inviteCode }` |
 | PUT | `/api/sessions/:id/brief` | Any member replaces the project brief with `{ content, baseUpdatedAt }` (max 20,000 chars). `baseUpdatedAt` is the `briefUpdatedAt` the edit started from (`null` if never set); a mismatch returns `409 conflict`. Returns the session. |
+| POST | `/api/sessions/:id/brief/refresh` | Any member: AI rewrites the brief from the current brief and main's latest messages. Returns the session. `409` while a refresh is running, `502 upstream_error` if the model fails. |
+| GET | `/api/sessions/:id/documents` | The session's documents (specs and docs), with content, by name |
+| PUT | `/api/sessions/:id/documents` | Any member creates or replaces a document with `{ name, content, baseUpdatedAt }` (max 60,000 chars). `baseUpdatedAt: null` creates it; to edit, pass its `updatedAt`. A taken name or a mismatch returns `409 conflict`. |
+| GET | `/api/documents/:id` | One document |
+| DELETE | `/api/documents/:id` | Any member deletes a document |
 | GET | `/api/sessions/:id/agents` | Agent tokens owned by session members: `tokenId`, `label` (the @mention name), `ownerId`, `ownerName`, `active` (used in the last 5 min) |
 | GET | `/api/sessions/:id/branches` | All branches, with owner, model, fork point, and message count |
-| POST | `/api/sessions/:id/branches` | Create a branch from `{ fromMessageId, model, name? }` |
+| POST | `/api/sessions/:id/branches` | Create a branch from `{ fromMessageId, model, name?, documentIds? }`. `documentIds` are the documents its AI reads; omitted, it copies the parent branch's selection (every document when forking from main). |
 | PATCH | `/api/branches/:id` | Owner only: update `{ name?, model? }` |
+| PUT | `/api/branches/:id/documents` | Owner only: set `{ documentIds }`, the documents this branch's AI reads. `400` on main, which always reads every document. |
 | GET | `/api/branches/:id/messages` | Full message path for the branch, root to head |
 | POST | `/api/branches/:id/messages` | Send `{ content, triggerAi? = true }`. Returns the user message and the pending assistant message ID. The reply streams over WebSocket. A message that @mentions a session agent's label is saved as a mention and gets no built-in AI reply. |
 | POST | `/api/branches/:id/share` | Branch owner only. Posts an AI summary of the branch's own messages into main (`sharedFromBranchId` = the branch) and returns that message. `400` for main or an empty branch. |
@@ -229,7 +236,7 @@ claude mcp add --transport http tandem <SERVER_URL>/mcp \
 
 Some clients name the transport `"http"` instead of `"streamable-http"`.
 
-**Tools:** `list_sessions`, `get_session`, `read_branch`, `post_message`, `create_branch`, `list_models`, `wait_for_mentions`, `get_branch_context`, `set_working`, `share_to_main`. An agent loops on `wait_for_mentions`, reads the branch with `get_branch_context`, calls `set_working`, and replies with `post_message`. Messages an agent posts appear live in the app with an agent label.
+**Tools:** `list_sessions`, `get_session`, `read_branch`, `post_message`, `create_branch`, `list_models`, `wait_for_mentions`, `get_branch_context`, `set_working`, `share_to_main`, `update_brief`, `refresh_brief`, `list_documents`, `read_document`, `write_document`. An agent loops on `wait_for_mentions`, reads the branch with `get_branch_context`, calls `set_working`, and replies with `post_message`. Messages an agent posts appear live in the app with an agent label.
 
 **Claude Code as a teammate.** After `claude mcp add`, start `claude` and paste:
 

@@ -19,7 +19,7 @@ These describe the shipped MVP and should remain compatible as agent chat is add
 | Models | The MVP's automatic reply uses the branch's model through OpenRouter's OpenAI-compatible API, with streaming. |
 | API key | One `OPENROUTER_API_KEY`, held only on the server. Users do not bring their own keys. |
 | MCP identity | MCP clients act as their token's user. Their messages carry that user's `author_id` and `author_type = agent`; this is distinct from a configured, first-class Tandem agent. |
-| Context | Model context is built from the session's project brief (always the latest version) plus the current branch's root-to-head path; sibling-branch messages are excluded. |
+| Context | Model context is built from the session's brief (a summary of main), the session documents the branch reads (all of them in main), and the current branch's root-to-head path; brief and documents are always the latest version, and sibling-branch messages are excluded. |
 
 ## Agent chat target
 
@@ -126,9 +126,10 @@ Messages form a **tree**. Each message stores `parent_id`, the message before it
 | Table | Fields |
 |---|---|
 | `users` | id, kind (`github` \| `guest` \| `agent`), display_name, github_id?, device_id?, avatar_url, created_at |
-| `sessions` | id, title, owner_id, default_model, invite_code (unique), created_at, brief (markdown, default ''), brief_updated_at?, brief_updated_by? |
+| `sessions` | id, title, owner_id, default_model, invite_code (unique), created_at, brief (markdown summary of main, default ''), brief_updated_at?, brief_updated_by? (a user id, or `system` for an automatic refresh) |
+| `session_documents` | id, session_id, name, content (markdown), created_at, updated_at, updated_by — unique (session_id, name). Specs and docs such as ARCHITECTURE.md or TODO.md; `updated_at` is the optimistic version. |
 | `session_members` | session_id, user_id, joined_at, last_seen_at — PK (session_id, user_id) |
-| `branches` | id, session_id, owner_id (null for main), is_main, name, model, fork_message_id (null for main), head_message_id, created_at |
+| `branches` | id, session_id, owner_id (null for main), is_main, name, model, fork_message_id (null for main), head_message_id, created_at, document_ids? (JSON array of the session documents this branch's AI reads; null on main, which reads all) |
 | `agents` | id, session_id, owner_id, name, model, system_prompt, created_at, updated_at, archived_at? |
 | `tools` | id, session_id, owner_id, name, description, input_schema, executor_kind, config_ref?, enabled, created_at |
 | `agent_tools` | agent_id, tool_id — PK (agent_id, tool_id) |
@@ -148,6 +149,7 @@ Persisted request/result fields must be redacted of credentials and bounded in s
 - A new branch starts with `head_message_id = fork_message_id`. Its first message gets `parent_id = head`, which is the fork point.
 - Every new message gets `parent_id = branch.head_message_id`. In the same transaction, the branch head moves to the new message.
 - A branch's **parent branch** is the branch that holds its `fork_message_id`. This is how the sidebar draws branches as an indented tree.
+- A new branch reads the documents chosen when it is created; without a choice, it copies its parent branch's selection (every document when forking from main). Only the branch owner changes it later. Deleted documents simply drop out of every selection.
 - Creating a branch snapshots the source branch's agent roster in the same transaction. Roster edits and default-agent changes are branch-local.
 - An agent and tool must belong to the same session as the branch/run. Only the agent owner may edit its definition; the branch owner manages that branch's roster. Both operations are authorized in services, not only in the UI.
 - Tool-call and tool-result messages are linked to their durable `tool_calls` record. They are visible in the timeline but are converted to the model's structured tool protocol by the context builder; they are not treated as ordinary user-authored prose.
@@ -163,7 +165,9 @@ path.reverse()
 context = path.filter(status == 'done')   // skip pending/error assistant messages
 ```
 
-The context builder is a pure function over the branch path, run snapshot, and linked tool events. A short system prompt opens the context and explains the multiplayer format. If the session has a **project brief**, it follows as a second system message. The brief is read live at reply time, not from the path, so a branch forked before a brief edit still sees the latest version. User messages become `user` (prefixed with the author's display name, or an agent's token label); agent/assistant messages use the corresponding assistant role and agent identity; completed tool calls/results become the provider's structured tool messages. Pending, failed, or cancelled work is not silently presented as a successful tool result. The key acceptance check remains that a branch sees its fork history and its own events, never sibling-branch messages.
+The context builder is a pure function over the branch path, run snapshot, and linked tool events. A short system prompt opens the context and explains the multiplayer format. Then come the shared parts of the context, each its own system message: the session's **brief**, then each **document** the branch reads (in full, by name), then one line naming the documents it does not read. Main reads every document. These are read live at reply time, not from the path, so a branch forked before an edit still sees the latest version.
+
+**Main is the hub; branches are workstreams.** Documents hold the specs (ARCHITECTURE.md, TODO.md, …); a branch picks the ones its task needs, so a frontend branch is not handed the whole backend spec. The brief is not a spec: it is a short AI summary of main (direction, decisions, who is on what branch, open questions). It is rewritten from the current brief, the branch list, the document names, and main's latest 60 messages when a member clicks Refresh (or an agent calls `refresh_brief`), and automatically once 20 finished messages have landed in main since its last update (only when a model is configured, so a dev stub never replaces it). A refresh is saved against the version it read, so a teammate's edit made during generation wins. Members can also edit the brief by hand. User messages become `user` (prefixed with the author's display name, or an agent's token label); agent/assistant messages use the corresponding assistant role and agent identity; completed tool calls/results become the provider's structured tool messages. Pending, failed, or cancelled work is not silently presented as a successful tool result. The key acceptance check remains that a branch sees its fork history and its own events, never sibling-branch messages.
 
 ### Routing and message ordering
 
@@ -233,6 +237,8 @@ Each app window opens one socket. The first frame must be `{ "type": "auth", "pa
 | S→C | `branch_updated` | full branch |
 | S→C | `typing` | userId, branchId |
 | S→C | `brief_updated` | sessionId, brief, briefUpdatedAt, briefUpdatedBy |
+| S→C | `document_updated` | full document (created or saved) |
+| S→C | `document_deleted` | sessionId, documentId |
 
 ### Presence
 
@@ -264,12 +270,16 @@ The MCP server uses `@modelcontextprotocol/sdk` with the Streamable HTTP transpo
 | `get_session` | sessionId | members with online status; branches with owner and model |
 | `read_branch` | branchId, limit = 50 | newest messages on the branch path, oldest first, with author and model |
 | `post_message` | branchId, content, triggerAi = false | created message; if `triggerAi`, waits for and returns the AI reply |
-| `create_branch` | fromMessageId, model, name? | new branch |
+| `create_branch` | fromMessageId, model, name?, documentIds? | new branch; `documentIds` omitted copies the parent branch's selection |
 | `list_models` | — | model IDs and names (only `:free` models unless `OPENROUTER_ALLOW_PAID=true`) |
 | `wait_for_mentions` | since?, timeoutSeconds = 25 (max 50) | `{ mentions, cursor }`: @mentions of this agent token after `since` in the user's sessions; waits until one arrives or the timeout passes. Agents loop, passing `cursor` back as `since`. |
-| `get_branch_context` | branchId, limit = 200 | session, the session's `brief` and `briefUpdatedAt`, branch with owner, `forkedFrom`, the root-to-head path (including history inherited from the fork), and the session's other branches |
+| `get_branch_context` | branchId, limit = 200 | session, the session's `brief` and `briefUpdatedAt`, the `documents` the branch reads (in full) and `otherDocuments` (id, name, updatedAt), branch with owner, `forkedFrom`, the root-to-head path (including history inherited from the fork), and the session's other branches |
 | `share_to_main` | branchId | branch owner only: posts an AI summary of the branch's own messages into main, linked by `shared_from_branch_id`; returns that message |
-| `update_brief` | sessionId, content, baseUpdatedAt | any member: replaces the session's project brief; `baseUpdatedAt` must match the stored `briefUpdatedAt` (null if never set), otherwise a conflict error |
+| `update_brief` | sessionId, content, baseUpdatedAt | any member: replaces the session's brief; `baseUpdatedAt` must match the stored `briefUpdatedAt` (null if never set), otherwise a conflict error |
+| `refresh_brief` | sessionId | any member: AI rewrites the brief from main's latest messages; returns the session |
+| `list_documents` | sessionId | the session's documents: id, name, updatedAt, updatedBy, size in chars (no content) |
+| `read_document` | documentId | one document in full |
+| `write_document` | sessionId, name, content, baseUpdatedAt | any member: creates the document (`baseUpdatedAt` null, name unused) or replaces it (`baseUpdatedAt` = its `updatedAt`), otherwise a conflict error |
 | `set_working` | branchId, working = true | re-sends a `typing` event with the agent's label every 3 s ("Claude is working…") until the agent posts on that branch, turns it off, or 5 min pass |
 
 Each tool description says **when** an agent should use it. Example for `read_branch`: *"Read the conversation in a branch of a multiplayer chat session. Use this to catch up on what your team discussed before acting."*
@@ -292,8 +302,8 @@ Stretch goal: a local stdio MCP mode (`npx tandem-mcp`) that reuses the desktop 
 - **Sign-in**: GitHub button, a field to paste the fallback code, and a display name field with Continue as guest.
 - **Home**: the user's sessions, New session (title and default model), and Join (invite code or link).
 - **Session** (three columns):
-  - **Left**: title, Copy invite link, online count, a **Project brief** card that opens the brief to read or edit (any member; a save from an outdated version is refused and the draft kept), and the member list with online dots and agent badges. Below that, the branch tree, with main at the top.
-  - **Center**: messages for the selected branch, each with author, time, and model for AI messages. Markdown and code blocks render with syntax highlighting. Hovering a message shows **Branch from here**. A typing indicator shows who is typing in this branch.
+  - **Left**: title, Copy invite link, online count, a **Brief** card that opens the summary of main to read, edit, or **Refresh from main**, a **Documents** list (New, Upload files; each opens to read, edit, or delete; any member, and a save from an outdated version is refused with the draft kept; on a non-main branch each document has a checkbox for whether this branch's AI reads it, which only the owner can change), and the member list with online dots and agent badges. Below that, the branch tree, with main at the top.
+  - **Center**: messages for the selected branch, each with author, time, and model for AI messages. Markdown and code blocks render with syntax highlighting. Hovering a message shows **Branch from here**; its form also lists the documents with checkboxes, pre-ticked from the parent branch's selection. A typing indicator shows who is typing in this branch.
   - **Bottom**: the composer, plus a model dropdown for the branch owner. Non-owners see a disabled composer with a **Branch from latest message** button.
   - **Right** (build last): the message tree visual.
 - **Settings**: account and Sign out, **Connect an agent** (creates a token and copies the MCP config), the list of agent tokens with revoke, and the server URL.

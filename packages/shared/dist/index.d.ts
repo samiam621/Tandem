@@ -31,6 +31,16 @@ export interface Branch {
     forkMessageId: string | null;
     headMessageId: string | null;
     createdAt: string;
+    documentIds: string[] | null;
+}
+export interface SessionDocument {
+    id: string;
+    sessionId: string;
+    name: string;
+    content: string;
+    createdAt: string;
+    updatedAt: string;
+    updatedBy: string;
 }
 export interface Message {
     id: string;
@@ -95,18 +105,23 @@ export declare const JoinSessionSchema: z.ZodObject<{
 }, {
     inviteCode: string;
 }>;
+export declare const DOCUMENT_MAX_CHARS = 60000;
+export declare const DOCUMENT_NAME_MAX = 128;
 export declare const CreateBranchSchema: z.ZodObject<{
     fromMessageId: z.ZodString;
     model: z.ZodString;
     name: z.ZodOptional<z.ZodString>;
+    documentIds: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
 }, "strip", z.ZodTypeAny, {
     fromMessageId: string;
     model: string;
     name?: string | undefined;
+    documentIds?: string[] | undefined;
 }, {
     fromMessageId: string;
     model: string;
     name?: string | undefined;
+    documentIds?: string[] | undefined;
 }>;
 export declare const UpdateBranchSchema: z.ZodObject<{
     name: z.ZodOptional<z.ZodString>;
@@ -138,6 +153,26 @@ export declare const UpdateBriefSchema: z.ZodObject<{
 }, {
     content: string;
     baseUpdatedAt: string | null;
+}>;
+export declare const SaveDocumentSchema: z.ZodObject<{
+    name: z.ZodString;
+    content: z.ZodString;
+    baseUpdatedAt: z.ZodNullable<z.ZodString>;
+}, "strip", z.ZodTypeAny, {
+    name: string;
+    content: string;
+    baseUpdatedAt: string | null;
+}, {
+    name: string;
+    content: string;
+    baseUpdatedAt: string | null;
+}>;
+export declare const SetBranchDocumentsSchema: z.ZodObject<{
+    documentIds: z.ZodArray<z.ZodString, "many">;
+}, "strip", z.ZodTypeAny, {
+    documentIds: string[];
+}, {
+    documentIds: string[];
 }>;
 export declare const CreateTokenSchema: z.ZodObject<{
     label: z.ZodString;
@@ -237,7 +272,18 @@ export interface WsBriefUpdatedEvent {
         briefUpdatedBy: string;
     };
 }
-export type WsServerEvent = WsPresenceUpdateEvent | WsMessageCreatedEvent | WsAssistantDeltaEvent | WsAssistantDoneEvent | WsAssistantErrorEvent | WsBranchCreatedEvent | WsBranchUpdatedEvent | WsTypingEvent | WsBriefUpdatedEvent;
+export interface WsDocumentUpdatedEvent {
+    type: 'document_updated';
+    payload: SessionDocument;
+}
+export interface WsDocumentDeletedEvent {
+    type: 'document_deleted';
+    payload: {
+        sessionId: string;
+        documentId: string;
+    };
+}
+export type WsServerEvent = WsPresenceUpdateEvent | WsMessageCreatedEvent | WsAssistantDeltaEvent | WsAssistantDoneEvent | WsAssistantErrorEvent | WsBranchCreatedEvent | WsBranchUpdatedEvent | WsTypingEvent | WsBriefUpdatedEvent | WsDocumentUpdatedEvent | WsDocumentDeletedEvent;
 export interface McpSessionSummary {
     id: string;
     title: string;
@@ -282,6 +328,12 @@ export interface McpBranchContext {
     };
     brief: string;
     briefUpdatedAt: string | null;
+    documents: SessionDocument[];
+    otherDocuments: {
+        id: string;
+        name: string;
+        updatedAt: string;
+    }[];
     branch: Branch & {
         ownerDisplayName: string | null;
     };
