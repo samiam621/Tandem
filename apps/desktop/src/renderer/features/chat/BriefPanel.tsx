@@ -1,14 +1,10 @@
 import React, { useState } from 'react'
-import { BRIEF_MAX_CHARS } from '@tandem/shared'
+import { BRIEF_AUTO_REFRESH_AUTHOR, BRIEF_MAX_CHARS } from '@tandem/shared'
 import type { Session, User } from '@tandem/shared'
 import { api } from '../../lib/api'
 import { TextEditorPanel } from './TextEditorPanel'
 
-export interface BriefState {
-  brief: string
-  briefUpdatedAt: string | null
-  briefUpdatedBy: string | null
-}
+export type BriefState = Pick<Session, 'brief' | 'briefUpdatedAt' | 'briefUpdatedBy'>
 
 interface Props {
   sessionId: string
@@ -27,7 +23,7 @@ const toState = (s: Session): BriefState => ({ brief: s.brief, briefUpdatedAt: s
 export function BriefPanel({ sessionId, current, members, onChange, onClose }: Props) {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const updatedByName = current.briefUpdatedBy === 'system'
+  const updatedByName = current.briefUpdatedBy === BRIEF_AUTO_REFRESH_AUTHOR
     ? 'Tandem AI'
     : members.find((m) => m.id === current.briefUpdatedBy)?.displayName ?? null
 

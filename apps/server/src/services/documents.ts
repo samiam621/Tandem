@@ -5,16 +5,13 @@ import { branches, sessionDocuments } from '../db/schema.js'
 import { bus } from '../events.js'
 import { isSessionMember } from './sessions.js'
 import { rowToBranch } from './branches.js'
+import { fail } from './errors.js'
 import type { Branch, SessionDocument } from '@tandem/shared'
 
 // Session documents: the specs and docs (ARCHITECTURE.md, TODO.md, …) that live in main.
 // Main's AI reads all of them; every other branch reads the subset in its documentIds.
 
 function now() { return new Date().toISOString() }
-
-function fail(status: number, code: string, message: string): never {
-  throw Object.assign(new Error(message), { code, status })
-}
 
 function rowToDocument(row: typeof sessionDocuments.$inferSelect): SessionDocument {
   return { ...row }

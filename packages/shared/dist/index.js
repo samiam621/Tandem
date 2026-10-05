@@ -32,6 +32,9 @@ export const PostMessageSchema = z.object({
     triggerAi: z.boolean().default(true),
 });
 export const BRIEF_MAX_CHARS = 20000;
+// Session.briefUpdatedBy holds a user id, or this value when the server's automatic refresh wrote
+// the brief (no user did).
+export const BRIEF_AUTO_REFRESH_AUTHOR = 'system';
 // baseUpdatedAt is the briefUpdatedAt the edit started from; a mismatch means someone saved in between.
 export const UpdateBriefSchema = z.object({
     content: z.string().max(BRIEF_MAX_CHARS),

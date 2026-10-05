@@ -144,6 +144,7 @@ export declare const PostMessageSchema: z.ZodObject<{
     triggerAi?: boolean | undefined;
 }>;
 export declare const BRIEF_MAX_CHARS = 20000;
+export declare const BRIEF_AUTO_REFRESH_AUTHOR = "system";
 export declare const UpdateBriefSchema: z.ZodObject<{
     content: z.ZodString;
     baseUpdatedAt: z.ZodNullable<z.ZodString>;

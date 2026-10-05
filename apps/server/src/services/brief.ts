@@ -4,9 +4,10 @@ import { branches, messages, sessions, users } from '../db/schema.js'
 import { bus } from '../events.js'
 import { aiConfigured, summarize, BRIEF_PROMPT } from '../ai/openrouter.js'
 import { pathToHead } from '../ai/context.js'
-import { BRIEF_MAX_CHARS } from '@tandem/shared'
+import { BRIEF_AUTO_REFRESH_AUTHOR, BRIEF_MAX_CHARS } from '@tandem/shared'
 import { isSessionMember, writeBrief } from './sessions.js'
 import { documentsForBranch, sessionDocumentRows } from './documents.js'
+import { fail } from './errors.js'
 import type { Session } from '@tandem/shared'
 
 // The brief is a short AI summary of main: direction, decisions, who's on what. It is rewritten
@@ -16,10 +17,6 @@ import type { Session } from '@tandem/shared'
 export const BRIEF_REFRESH_EVERY = 20
 const BRIEF_INPUT_MESSAGES = 60
 const BRIEF_INPUT_CHARS = 20_000
-
-function fail(status: number, code: string, message: string): never {
-  throw Object.assign(new Error(message), { code, status })
-}
 
 const refreshing = new Set<string>() // sessionIds; one refresh at a time per session
 
@@ -77,25 +74,35 @@ function briefInput(sessionId: string, currentBrief: string, mainHeadId: string 
 }
 
 // ─── Automatic refresh ────────────────────────────────────────────────────────
-// After a finished message lands in main, count main messages since the brief's last update; at
-// BRIEF_REFRESH_EVERY, refresh in the background. Skipped without a configured model, so a dev
-// stub never replaces a hand-written brief.
+// After a finished message lands in main, count main messages since the brief's last update (and
+// since the last automatic attempt); at BRIEF_REFRESH_EVERY, refresh in the background. A failed
+// attempt (model error, or a teammate saving first) therefore waits for another
+// BRIEF_REFRESH_EVERY messages instead of calling the model again on every message. Skipped
+// without a configured model, so a dev stub never replaces a hand-written brief.
 
-function mainMessagesSinceBrief(sessionId: string): number {
+const lastAutoAttemptHead = new Map<string, string>() // sessionId → main's head message at the last automatic attempt
+
+function mainMessagesSinceBrief(sessionId: string): { count: number; headId: string | null } {
   const db = getDb()
   const session = db.select().from(sessions).where(eq(sessions.id, sessionId)).get()
   const main = db.select().from(branches).where(and(eq(branches.sessionId, sessionId), eq(branches.isMain, true))).get()
-  if (!session || !main?.headMessageId) return 0
+  if (!session || !main?.headMessageId) return { count: 0, headId: null }
   const rows = db.select().from(messages).where(eq(messages.sessionId, sessionId)).all()
+  const path = pathToHead(rows, main.headMessageId)
   const since = session.briefUpdatedAt ?? ''
-  return pathToHead(rows, main.headMessageId).filter((m) => m.status === 'done' && m.createdAt > since).length
+  const afterAttempt = path.findIndex((m) => m.id === lastAutoAttemptHead.get(sessionId)) + 1 // 0 when there was none
+  const count = path.slice(afterAttempt).filter((m) => m.status === 'done' && m.createdAt > since).length
+  return { count, headId: main.headMessageId }
 }
 
 export function maybeAutoRefresh(sessionId: string, branchId: string) {
   if (!aiConfigured() || refreshing.has(sessionId)) return
   const branch = getDb().select({ isMain: branches.isMain }).from(branches).where(eq(branches.id, branchId)).get()
-  if (!branch?.isMain || mainMessagesSinceBrief(sessionId) < BRIEF_REFRESH_EVERY) return
-  runRefresh(sessionId, 'system').catch(() => {}) // a conflict means a teammate just saved; try again later
+  if (!branch?.isMain) return
+  const { count, headId } = mainMessagesSinceBrief(sessionId)
+  if (count < BRIEF_REFRESH_EVERY || !headId) return
+  lastAutoAttemptHead.set(sessionId, headId)
+  runRefresh(sessionId, BRIEF_AUTO_REFRESH_AUTHOR).catch(() => {}) // a failure retries after the next BRIEF_REFRESH_EVERY messages
 }
 
 bus.onSession(({ sessionId, event }) => {

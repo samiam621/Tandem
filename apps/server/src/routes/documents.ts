@@ -1,14 +1,15 @@
-import type { FastifyPluginAsync } from 'fastify'
+import type { FastifyPluginAsync, FastifyReply } from 'fastify'
 import { SaveDocumentSchema } from '@tandem/shared'
 import { requireAuth } from '../middleware/auth.js'
+import { sendServiceError } from './errors.js'
 import { listDocuments, getDocument, saveDocument, deleteDocument } from '../services/documents.js'
 
 export const documentRoutes: FastifyPluginAsync = async (app) => {
-  const send = (reply: any, run: () => unknown) => {
+  const send = (reply: FastifyReply, run: () => unknown) => {
     try {
       return reply.send(run())
-    } catch (err: any) {
-      return reply.code(err.status ?? 500).send({ error: { code: err.code ?? 'server_error', message: err.message } })
+    } catch (err) {
+      return sendServiceError(reply, err)
     }
   }
 

@@ -24,7 +24,7 @@ export interface Session {
   createdAt: string
   brief: string // short summary of main (direction, decisions, who's on what); every branch's AI reads the latest version
   briefUpdatedAt: string | null
-  briefUpdatedBy: string | null
+  briefUpdatedBy: string | null // a user id, or BRIEF_AUTO_REFRESH_AUTHOR
 }
 
 export interface Branch {
@@ -126,6 +126,10 @@ export const PostMessageSchema = z.object({
 })
 
 export const BRIEF_MAX_CHARS = 20000
+
+// Session.briefUpdatedBy holds a user id, or this value when the server's automatic refresh wrote
+// the brief (no user did).
+export const BRIEF_AUTO_REFRESH_AUTHOR = 'system'
 
 // baseUpdatedAt is the briefUpdatedAt the edit started from; a mismatch means someone saved in between.
 export const UpdateBriefSchema = z.object({

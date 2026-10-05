@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { resolveToken } from '../services/auth.js'
 import type { Actor } from '../services/auth.js'
 import { listSessions, getSession, getSessionBranches, updateBrief } from '../services/sessions.js'
-import { BRIEF_MAX_CHARS, DOCUMENT_MAX_CHARS, DOCUMENT_NAME_MAX } from '@tandem/shared'
+import { BRIEF_MAX_CHARS, SaveDocumentSchema } from '@tandem/shared'
 import { listDocuments, getDocument, saveDocument } from '../services/documents.js'
 import { refreshBrief } from '../services/brief.js'
 import { getBranchMessages, postMessage, shareBranch } from '../services/messages.js'
@@ -15,6 +15,20 @@ import { waitForMentions, getBranchContext, setWorking } from '../services/agent
 import { eq } from 'drizzle-orm'
 import { getDb } from '../db/index.js'
 import { messages, users } from '../db/schema.js'
+
+// Tool results are JSON text. A service failure is returned as { error: message } so the agent can
+// read it and react, instead of failing the tool call.
+function json(value: unknown) {
+  return { content: [{ type: 'text' as const, text: JSON.stringify(value) }] }
+}
+
+async function jsonOrError(run: () => unknown) {
+  try {
+    return json(await run())
+  } catch (err: unknown) {
+    return json({ error: err instanceof Error ? err.message : String(err) })
+  }
+}
 
 // Build a new McpServer per request with the actor closed over.
 // This is stateless mode — no session persistence across requests.
@@ -28,7 +42,7 @@ function buildMcpServer(actor: Actor) {
     {},
     async () => {
       const sess = await listSessions(actor.userId)
-      return { content: [{ type: 'text' as const, text: JSON.stringify(sess) }] }
+      return json(sess)
     },
   )
 
@@ -39,9 +53,9 @@ function buildMcpServer(actor: Actor) {
     { sessionId: z.string().describe('The session ID') },
     async ({ sessionId }) => {
       const data = await getSession(actor, sessionId)
-      if (!data) return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'not_found' }) }] }
+      if (!data) return json({ error: 'not_found' })
       const branchList = await getSessionBranches(actor, sessionId) ?? []
-      return { content: [{ type: 'text' as const, text: JSON.stringify({ ...data, branches: branchList }) }] }
+      return json({ ...data, branches: branchList })
     },
   )
 
@@ -55,7 +69,7 @@ function buildMcpServer(actor: Actor) {
     },
     async ({ branchId, limit }) => {
       const msgs = await getBranchMessages(actor, branchId)
-      if (!msgs) return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'not_found' }) }] }
+      if (!msgs) return json({ error: 'not_found' })
 
       const db = getDb()
       const userRows = db.select().from(users).all()
@@ -71,7 +85,7 @@ function buildMcpServer(actor: Actor) {
         status: m.status,
         createdAt: m.createdAt,
       }))
-      return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] }
+      return json(result)
     },
   )
 
@@ -85,12 +99,7 @@ function buildMcpServer(actor: Actor) {
       triggerAi: z.boolean().default(false).describe('Whether to trigger an AI reply'),
     },
     async ({ branchId, content, triggerAi }) => {
-      try {
-        const result = await postMessage(actor, branchId, content, triggerAi)
-        return { content: [{ type: 'text' as const, text: JSON.stringify(result.userMessage) }] }
-      } catch (err: unknown) {
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }] }
-      }
+      return jsonOrError(async () => (await postMessage(actor, branchId, content, triggerAi)).userMessage)
     },
   )
 
@@ -106,7 +115,7 @@ function buildMcpServer(actor: Actor) {
       const from = since ?? new Date().toISOString()
       const mentions = await waitForMentions(actor, from, timeoutSeconds * 1000)
       const cursor = mentions.length ? mentions[mentions.length - 1].createdAt : from
-      return { content: [{ type: 'text' as const, text: JSON.stringify({ mentions, cursor }) }] }
+      return json({ mentions, cursor })
     },
   )
 
@@ -120,7 +129,7 @@ function buildMcpServer(actor: Actor) {
     },
     async ({ branchId, limit }) => {
       const context = await getBranchContext(actor, branchId, limit)
-      return { content: [{ type: 'text' as const, text: JSON.stringify(context ?? { error: 'not_found' }) }] }
+      return json(context ?? { error: 'not_found' })
     },
   )
 
@@ -134,7 +143,7 @@ function buildMcpServer(actor: Actor) {
     },
     async ({ branchId, working }) => {
       const ok = setWorking(actor, branchId, working)
-      return { content: [{ type: 'text' as const, text: JSON.stringify(ok ? { ok: true } : { error: 'not_found' }) }] }
+      return json(ok ? { ok: true } : { error: 'not_found' })
     },
   )
 
@@ -144,11 +153,7 @@ function buildMcpServer(actor: Actor) {
     "Post an AI summary of a branch's work (everything since it split from main) into the main thread, so the whole team is on the same page. Use it when work on a branch reaches a result worth sharing. Only works on branches owned by your token's user.",
     { branchId: z.string().describe('The branch ID to summarize') },
     async ({ branchId }) => {
-      try {
-        return { content: [{ type: 'text' as const, text: JSON.stringify(await shareBranch(actor, branchId)) }] }
-      } catch (err: unknown) {
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }] }
-      }
+      return jsonOrError(() => shareBranch(actor, branchId))
     },
   )
 
@@ -162,11 +167,7 @@ function buildMcpServer(actor: Actor) {
       baseUpdatedAt: z.string().nullable().describe('briefUpdatedAt from get_branch_context (null if the brief was never set)'),
     },
     async ({ sessionId, content, baseUpdatedAt }) => {
-      try {
-        return { content: [{ type: 'text' as const, text: JSON.stringify(updateBrief(actor, sessionId, content, baseUpdatedAt)) }] }
-      } catch (err: unknown) {
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }] }
-      }
+      return jsonOrError(() => updateBrief(actor, sessionId, content, baseUpdatedAt))
     },
   )
 
@@ -176,11 +177,7 @@ function buildMcpServer(actor: Actor) {
     "Have AI rewrite the session's brief from the current brief and the main thread's latest messages. Use it after an important discussion in main, so every branch picks up the new direction. Returns the session with the new brief.",
     { sessionId: z.string().describe('The session ID') },
     async ({ sessionId }) => {
-      try {
-        return { content: [{ type: 'text' as const, text: JSON.stringify(await refreshBrief(actor, sessionId)) }] }
-      } catch (err: unknown) {
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }] }
-      }
+      return jsonOrError(() => refreshBrief(actor, sessionId))
     },
   )
 
@@ -190,12 +187,7 @@ function buildMcpServer(actor: Actor) {
     "List the session's project documents (specs and docs such as ARCHITECTURE.md, TODO.md): id, name, size and last update. Use it to find a document that get_branch_context did not load for your branch.",
     { sessionId: z.string().describe('The session ID') },
     async ({ sessionId }) => {
-      try {
-        const docs = listDocuments(actor, sessionId).map(({ content, ...d }) => ({ ...d, chars: content.length }))
-        return { content: [{ type: 'text' as const, text: JSON.stringify(docs) }] }
-      } catch (err: unknown) {
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }] }
-      }
+      return jsonOrError(() => listDocuments(actor, sessionId).map(({ content, ...d }) => ({ ...d, chars: content.length })))
     },
   )
 
@@ -205,11 +197,7 @@ function buildMcpServer(actor: Actor) {
     'Read one project document in full, with its updatedAt (pass that to write_document when you edit it).',
     { documentId: z.string().describe('The document ID') },
     async ({ documentId }) => {
-      try {
-        return { content: [{ type: 'text' as const, text: JSON.stringify(getDocument(actor, documentId)) }] }
-      } catch (err: unknown) {
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }] }
-      }
+      return jsonOrError(() => getDocument(actor, documentId))
     },
   )
 
@@ -219,16 +207,13 @@ function buildMcpServer(actor: Actor) {
     "Create or replace a project document by name, e.g. tick off items in TODO.md or record a spec change in ARCHITECTURE.md. Every branch that reads the document sees the new version on its next reply. To edit, read it first and pass its updatedAt as baseUpdatedAt; to create a new document, pass null. If a teammate saved in between you get a conflict error, so read it again and reapply your change.",
     {
       sessionId: z.string().describe('The session ID'),
-      name: z.string().min(1).max(DOCUMENT_NAME_MAX).describe('Document name, e.g. TODO.md'),
-      content: z.string().max(DOCUMENT_MAX_CHARS).describe('The full new content, in markdown'),
-      baseUpdatedAt: z.string().nullable().describe('updatedAt of the version you edited, or null to create'),
+      // Shared with PUT /api/sessions/:id/documents, so the name is trimmed before it is checked.
+      name: SaveDocumentSchema.shape.name.describe('Document name, e.g. TODO.md'),
+      content: SaveDocumentSchema.shape.content.describe('The full new content, in markdown'),
+      baseUpdatedAt: SaveDocumentSchema.shape.baseUpdatedAt.describe('updatedAt of the version you edited, or null to create'),
     },
     async ({ sessionId, name, content, baseUpdatedAt }) => {
-      try {
-        return { content: [{ type: 'text' as const, text: JSON.stringify(saveDocument(actor, sessionId, name.trim(), content, baseUpdatedAt)) }] }
-      } catch (err: unknown) {
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }] }
-      }
+      return jsonOrError(() => saveDocument(actor, sessionId, name, content, baseUpdatedAt))
     },
   )
 
@@ -245,10 +230,10 @@ function buildMcpServer(actor: Actor) {
     async ({ fromMessageId, model, name, documentIds }) => {
       const db = getDb()
       const msg = db.select().from(messages).where(eq(messages.id, fromMessageId)).get()
-      if (!msg) return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'message_not_found' }) }] }
+      if (!msg) return json({ error: 'message_not_found' })
       const branch = await createBranch(actor, msg.sessionId, fromMessageId, model, name, documentIds)
-      if (!branch) return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'not_found' }) }] }
-      return { content: [{ type: 'text' as const, text: JSON.stringify(branch) }] }
+      if (!branch) return json({ error: 'not_found' })
+      return json(branch)
     },
   )
 
@@ -259,9 +244,9 @@ function buildMcpServer(actor: Actor) {
     {},
     async () => {
       try {
-        return { content: [{ type: 'text' as const, text: JSON.stringify(await listModels()) }] }
+        return json(await listModels())
       } catch {
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'upstream_error' }) }] }
+        return json({ error: 'upstream_error' })
       }
     },
   )

@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify'
 import { CreateSessionSchema, JoinSessionSchema, CreateBranchSchema, UpdateBriefSchema } from '@tandem/shared'
 import { requireAuth } from '../middleware/auth.js'
+import { sendServiceError } from './errors.js'
 import {
   createSession,
   listSessions,
@@ -58,9 +59,8 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
     }
     try {
       return reply.send(updateBrief(req.actor!, id, body.data.content, body.data.baseUpdatedAt))
-    } catch (err: any) {
-      const status = err.status ?? 500
-      return reply.code(status).send({ error: { code: err.code ?? 'server_error', message: err.message } })
+    } catch (err) {
+      return sendServiceError(reply, err)
     }
   })
 
@@ -69,8 +69,8 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
     const { id } = req.params as { id: string }
     try {
       return reply.send(await refreshBrief(req.actor!, id))
-    } catch (err: any) {
-      return reply.code(err.status ?? 500).send({ error: { code: err.code ?? 'server_error', message: err.message } })
+    } catch (err) {
+      return sendServiceError(reply, err)
     }
   })
 

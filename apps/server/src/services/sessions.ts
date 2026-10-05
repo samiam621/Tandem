@@ -4,6 +4,7 @@ import { getDb } from '../db/index.js'
 import { sessions, sessionMembers, branches, users, apiTokens } from '../db/schema.js'
 import { bus } from '../events.js'
 import { rowToBranch } from './branches.js'
+import { fail } from './errors.js'
 import type { Session, Branch, User, SessionAgent } from '@tandem/shared'
 
 function now() { return new Date().toISOString() }
@@ -219,13 +220,11 @@ export function updateBrief(
   content: string,
   baseUpdatedAt: string | null,
 ): Session {
-  if (!isSessionMember(sessionId, actor.userId)) {
-    throw Object.assign(new Error('Session not found'), { code: 'not_found', status: 404 })
-  }
+  if (!isSessionMember(sessionId, actor.userId)) fail(404, 'not_found', 'Session not found')
   return writeBrief(sessionId, content, baseUpdatedAt, actor.userId)
 }
 
-// updatedBy is a user id, or 'system' for an automatic refresh.
+// updatedBy is a user id, or BRIEF_AUTO_REFRESH_AUTHOR for an automatic refresh.
 export function writeBrief(sessionId: string, content: string, baseUpdatedAt: string | null, updatedBy: string): Session {
   const db = getDb()
   // briefUpdatedAt doubles as the version, so it must strictly increase even for saves in the same millisecond.
@@ -239,9 +238,7 @@ export function writeBrief(sessionId: string, content: string, baseUpdatedAt: st
       baseUpdatedAt === null ? isNull(sessions.briefUpdatedAt) : eq(sessions.briefUpdatedAt, baseUpdatedAt),
     ))
     .run()
-  if (res.changes === 0) {
-    throw Object.assign(new Error('Someone updated the brief since you started editing'), { code: 'conflict', status: 409 })
-  }
+  if (res.changes === 0) fail(409, 'conflict', 'Someone updated the brief since you started editing')
 
   const session = rowToSession(db.select().from(sessions).where(eq(sessions.id, sessionId)).get()!)
   bus.emitSession(sessionId, {

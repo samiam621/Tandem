@@ -8,6 +8,9 @@ import { MentionMenu, buildMentionItems, highlightMentions } from './MentionMenu
 import { BriefPanel, type BriefState } from './BriefPanel'
 import { DocumentPanel } from './DocumentPanel'
 
+// openDocId while the document panel is open on a new, unsaved document.
+const CREATING_DOCUMENT = 'new'
+
 interface Props {
   session: Session
   onBack: () => void
@@ -46,7 +49,7 @@ export function SessionView({ session, onBack }: Props) {
   const [briefOpen, setBriefOpen] = useState(false)
   // ── Documents (specs in main; each branch reads its selection) ──────────────
   const [documents, setDocuments] = useState<SessionDocument[]>([])
-  const [openDocId, setOpenDocId] = useState<string | null>(null) // 'new' while creating
+  const [openDocId, setOpenDocId] = useState<string | null>(null) // a document id, or CREATING_DOCUMENT
   const [docsError, setDocsError] = useState<string | null>(null)
   const [branchDocIds, setBranchDocIds] = useState<string[]>([]) // selection in the branch dialog
   const uploadRef = useRef<HTMLInputElement>(null)
@@ -523,7 +526,7 @@ export function SessionView({ session, onBack }: Props) {
             <div className="flex items-center justify-between mb-1">
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Documents</p>
               <span className="flex gap-1">
-                <button onClick={() => setOpenDocId('new')} className="text-xs text-gray-400 hover:text-gray-200 rounded px-1 hover:bg-gray-800">New</button>
+                <button onClick={() => setOpenDocId(CREATING_DOCUMENT)} className="text-xs text-gray-400 hover:text-gray-200 rounded px-1 hover:bg-gray-800">New</button>
                 <button onClick={() => uploadRef.current?.click()} className="text-xs text-gray-400 hover:text-gray-200 rounded px-1 hover:bg-gray-800">Upload</button>
                 <input
                   ref={uploadRef}

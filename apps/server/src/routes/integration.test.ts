@@ -14,6 +14,9 @@ import { recoverStaleMessages } from '../services/messages.js'
 import { resolveToken } from '../services/auth.js'
 import { listMentions, waitForMentions, getBranchContext, setWorking } from '../services/agents.js'
 import { bus } from '../events.js'
+import { BRIEF_REFRESH_EVERY } from '../services/brief.js'
+import * as openrouter from '../ai/openrouter.js'
+import { BRIEF_AUTO_REFRESH_AUTHOR, SaveDocumentSchema } from '@tandem/shared'
 import Database from 'better-sqlite3'
 import { drizzle } from 'drizzle-orm/better-sqlite3'
 import * as schema from '../db/schema.js'
@@ -365,6 +368,60 @@ describe('REST integration', () => {
       method: 'POST', url: '/api/auth/guest', payload: { displayName: 'Eve', deviceId: 'device-eve-refresh' },
     })).json().token
     expect((await refresh(outsider)).statusCode).toBe(404)
+  })
+
+  it('the brief refreshes itself every BRIEF_REFRESH_EVERY main messages; a failed attempt waits for the next batch', async () => {
+    // A fresh user and session: the rate limit counts per user, and main must start with no messages.
+    const guest = (await app.inject({
+      method: 'POST', url: '/api/auth/guest', payload: { displayName: 'Brief Bot Tester', deviceId: 'device-brief-auto' },
+    })).json().token
+    const created = (await app.inject({
+      method: 'POST', url: '/api/sessions', headers: { authorization: `Bearer ${guest}` },
+      payload: { title: 'Auto brief', defaultModel: 'openai/gpt-4o-mini' },
+    })).json()
+    const postToMain = async (n: number) => {
+      for (let i = 0; i < n; i++) {
+        await app.inject({
+          method: 'POST', url: `/api/branches/${created.mainBranch.id}/messages`,
+          headers: { authorization: `Bearer ${guest}` }, payload: { content: `update ${i}`, triggerAi: false },
+        })
+      }
+    }
+    const getBrief = async () => (await app.inject({
+      method: 'GET', url: `/api/sessions/${created.session.id}`, headers: { authorization: `Bearer ${guest}` },
+    })).json().session
+
+    // Without a model it never runs, so the dev stub cannot overwrite a hand-written brief.
+    const summarize = vi.spyOn(openrouter, 'summarize').mockRejectedValue(new Error('model down'))
+    await postToMain(BRIEF_REFRESH_EVERY)
+    expect(summarize).not.toHaveBeenCalled()
+
+    // With a model: the threshold was already reached, so the next main message starts a refresh.
+    const configured = vi.spyOn(openrouter, 'aiConfigured').mockReturnValue(true)
+    try {
+      await postToMain(1)
+      expect(summarize).toHaveBeenCalledTimes(1)
+      // It failed. The next messages do not call the model again until another full batch lands.
+      await postToMain(BRIEF_REFRESH_EVERY - 1)
+      expect(summarize).toHaveBeenCalledTimes(1)
+      summarize.mockResolvedValue('Team is shipping the auto brief.')
+      await postToMain(1)
+      expect(summarize).toHaveBeenCalledTimes(2)
+      await vi.waitFor(async () => expect((await getBrief()).brief).toBe('Team is shipping the auto brief.'))
+      expect((await getBrief()).briefUpdatedBy).toBe(BRIEF_AUTO_REFRESH_AUTHOR)
+      // A successful refresh resets the count.
+      await postToMain(BRIEF_REFRESH_EVERY - 1)
+      expect(summarize).toHaveBeenCalledTimes(2)
+    } finally {
+      configured.mockRestore()
+      summarize.mockRestore()
+    }
+  })
+
+  it('a document name is trimmed before it is checked, so a blank name is rejected', () => {
+    // The REST route and the MCP write_document tool both validate with this schema.
+    expect(SaveDocumentSchema.safeParse({ name: '   ', content: '', baseUpdatedAt: null }).success).toBe(false)
+    expect(SaveDocumentSchema.parse({ name: ' TODO.md ', content: '', baseUpdatedAt: null }).name).toBe('TODO.md')
   })
 
   it('documents: members create and edit with conflict checks; branches read their selection live', async () => {

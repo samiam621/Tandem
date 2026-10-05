@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify'
 import { UpdateBranchSchema, SetBranchDocumentsSchema } from '@tandem/shared'
 import { requireAuth } from '../middleware/auth.js'
+import { sendServiceError } from './errors.js'
 import { eq, and } from 'drizzle-orm'
 import { getDb } from '../db/index.js'
 import { branches, sessionMembers } from '../db/schema.js'
@@ -47,8 +48,8 @@ export const branchRoutes: FastifyPluginAsync = async (app) => {
     }
     try {
       return reply.send(setBranchDocuments(req.actor!, id, body.data.documentIds))
-    } catch (err: any) {
-      return reply.code(err.status ?? 500).send({ error: { code: err.code ?? 'server_error', message: err.message } })
+    } catch (err) {
+      return sendServiceError(reply, err)
     }
   })
 
@@ -57,8 +58,8 @@ export const branchRoutes: FastifyPluginAsync = async (app) => {
     const { id } = req.params as { id: string }
     try {
       return reply.code(201).send(await shareBranch(req.actor!, id))
-    } catch (err: any) {
-      return reply.code(err.status ?? 500).send({ error: { code: err.code ?? 'server_error', message: err.message } })
+    } catch (err) {
+      return sendServiceError(reply, err)
     }
   })
 }
