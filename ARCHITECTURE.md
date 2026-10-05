@@ -304,10 +304,17 @@ Stretch goal: a local stdio MCP mode (`npx tandem-mcp`) that reuses the desktop 
 - **Sign-in**: GitHub button, a field to paste the fallback code, and a display name field with Continue as guest.
 - **Home**: the user's sessions, New session (title and default model), and Join (invite code or link).
 - **Session** (three columns):
-  - **Left**: title, Copy invite link, online count, a **Project brief** card that opens the brief to read or edit (any member; a save from an outdated version is refused and the draft kept), and the member list with online dots and agent badges. Below that, the branch tree, with main at the top.
+  - **Left**: title, Copy invite link, online count, a **Project brief** card that opens the brief to read or edit (any member; a save from an outdated version is refused and the draft kept), a **Project docs** card (see below), the member list with online dots and agent badges, and the branch tree with main at the top.
   - **Center**: messages for the selected branch, each with author, time, and model for AI messages. Markdown and code blocks render with syntax highlighting. Hovering a message shows **Branch from here**. A typing indicator shows who is typing in this branch.
   - **Bottom**: the composer, plus a model dropdown for the branch owner. Non-owners see a disabled composer with a **Branch from latest message** button.
   - **Right** (build last): the message tree visual.
+- **Project docs card** (left column, below Project brief):
+  - Lists each doc's title, size in chars, and kind (PDF label if applicable). Clicking a doc opens the **doc viewer modal**.
+  - **Upload button** opens a file picker (`accept=".md,.markdown,.txt,.json,.yaml,.yml,.csv,.ts,.tsx,.js,.py,.go,.rs,.java,.sql,.html,.css,.pdf"`). Text files are sent as `{ title, text }`; PDFs are base64-encoded and sent as `{ title, pdfBase64 }`. Files over 10 MB are refused client-side before upload. Server errors (e.g. scanned PDF with no text) are shown inline.
+  - **Doc viewer modal**: shaped like `BriefPanel`, shows the full extracted text in a monospace pre block. The uploader or the session owner sees a **Delete** button (with a confirm).
+  - Live updates: `doc_created` adds to the list; `doc_deleted` removes it (also reflected via `branch_updated` for pin counts).
+- **Branch dialog** (Branch from here): when docs exist, shows a "Pin docs to this branch" checkbox list (none ticked by default). Ticked ids are passed as `docIds` on create.
+- **Pinned docs control** (branch list item, left sidebar): branch owners see a "Pinned docs (N)" button next to "yours"; clicking it opens a modal checklist that saves changes immediately via `PATCH /api/branches/:id`. Other members see a read-only "Pinned docs (N)" count when N > 0. Main has no owner so it shows nothing.
 - **Settings**: account and Sign out, **Connect an agent** (creates a token and copies the MCP config), the list of agent tokens with revoke, and the server URL.
 
 ### Native behavior

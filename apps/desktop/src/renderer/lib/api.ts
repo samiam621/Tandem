@@ -40,6 +40,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json()
 }
 
+async function requestNoBody(path: string, init?: RequestInit): Promise<void> {
+  const base = await getBase()
+  const headers = await getHeaders()
+  const res = await fetch(`${base}${path}`, { ...init, headers: { ...headers, ...(init?.headers ?? {}) } })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw Object.assign(new Error(body?.error?.message ?? res.statusText), { code: body?.error?.code, status: res.status })
+  }
+}
+
 export const api = {
   health: () => request<{ ok: boolean }>('/api/health'),
 
@@ -105,20 +115,34 @@ export const api = {
   },
 
   branches: {
-    update: (branchId: string, data: { name?: string; model?: string }) =>
+    update: (branchId: string, data: { name?: string; model?: string; pinnedDocIds?: string[] }) =>
       request<import('@tandem/shared').Branch>(`/api/branches/${branchId}`, {
         method: 'PATCH',
         body: JSON.stringify(data),
       }),
-    create: (sessionId: string, fromMessageId: string, model: string, name?: string) =>
+    create: (sessionId: string, fromMessageId: string, model: string, name?: string, docIds?: string[]) =>
       request<import('@tandem/shared').Branch>(`/api/sessions/${sessionId}/branches`, {
         method: 'POST',
-        body: JSON.stringify({ fromMessageId, model, name }),
+        body: JSON.stringify({ fromMessageId, model, name, docIds }),
       }),
     share: (branchId: string) =>
       request<import('@tandem/shared').Message>(`/api/branches/${branchId}/share`, {
         method: 'POST',
       }),
+  },
+
+  docs: {
+    list: (sessionId: string) =>
+      request<import('@tandem/shared').ProjectDocMeta[]>(`/api/sessions/${sessionId}/docs`),
+    get: (docId: string) =>
+      request<import('@tandem/shared').ProjectDoc>(`/api/docs/${docId}`),
+    upload: (sessionId: string, body: { title: string; text: string } | { title: string; pdfBase64: string }) =>
+      request<import('@tandem/shared').ProjectDocMeta>(`/api/sessions/${sessionId}/docs`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    delete: (docId: string) =>
+      requestNoBody(`/api/docs/${docId}`, { method: 'DELETE' }),
   },
 
   tokens: {

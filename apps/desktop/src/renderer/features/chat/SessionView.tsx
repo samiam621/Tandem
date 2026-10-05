@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react'
-import type { Session, Branch, Message, User, SessionAgent } from '@tandem/shared'
+import type { Session, Branch, Message, User, SessionAgent, ProjectDocMeta } from '@tandem/shared'
 import { api } from '../../lib/api'
 import { useAuth } from '../../app/AuthContext'
 import { useWebSocket } from '../../lib/useWebSocket'
 import { MessageTreePanel } from './MessageTreePanel'
 import { MentionMenu, buildMentionItems, highlightMentions } from './MentionMenu'
 import { BriefPanel, type BriefState } from './BriefPanel'
+import { ProjectDocs } from './ProjectDocs'
 
 interface Props {
   session: Session
@@ -37,6 +38,12 @@ export function SessionView({ session, onBack, onSettings }: Props) {
   const [sharingBranchId, setSharingBranchId] = useState<string | null>(null)
   const [shareConfirm, setShareConfirm] = useState(false)
   const [shareError, setShareError] = useState<string | null>(null)
+  // ── Project docs ─────────────────────────────────────────────────────────────
+  const [docs, setDocs] = useState<ProjectDocMeta[]>([])
+  // ── Branch dialog: selected doc ids to pin ────────────────────────────────────
+  const [branchDocIds, setBranchDocIds] = useState<string[]>([])
+  // ── Pinned-docs panel: open for which branch id ───────────────────────────────
+  const [pinnedPanelBranchId, setPinnedPanelBranchId] = useState<string | null>(null)
   // ── Project brief ────────────────────────────────────────────────────────────
   const [brief, setBrief] = useState<BriefState>({
     brief: session.brief ?? '',
@@ -149,6 +156,16 @@ export function SessionView({ session, onBack, onSettings }: Props) {
           setBrief({ brief, briefUpdatedAt, briefUpdatedBy })
         }
         break
+      case 'doc_created':
+        if (event.payload.sessionId === session.id) {
+          setDocs((prev) => prev.find((d) => d.id === event.payload.id) ? prev : [...prev, event.payload])
+        }
+        break
+      case 'doc_deleted':
+        if (event.payload.sessionId === session.id) {
+          setDocs((prev) => prev.filter((d) => d.id !== event.payload.docId))
+        }
+        break
       case 'typing':
         if (event.payload.branchId !== activeBranchId) break
         {
@@ -197,6 +214,7 @@ export function SessionView({ session, onBack, onSettings }: Props) {
       const { brief, briefUpdatedAt, briefUpdatedBy } = data.session
       setBrief({ brief, briefUpdatedAt, briefUpdatedBy })
     })
+    api.docs.list(session.id).then(setDocs).catch(() => {})
     fetchAgents()
   }, [session.id, fetchAgents])
 
@@ -356,11 +374,13 @@ export function SessionView({ session, onBack, onSettings }: Props) {
     if (!branchingFromMsg) return
     setBranchError(null)
     try {
-      const branch = await api.branches.create(session.id, branchingFromMsg.id, branchModel, branchName || undefined)
+      const docIds = branchDocIds.length > 0 ? branchDocIds : undefined
+      const branch = await api.branches.create(session.id, branchingFromMsg.id, branchModel, branchName || undefined, docIds)
       setBranches((prev) => [...prev, branch])
       setActiveBranchId(branch.id)
       setBranchingFromMsg(null)
       setBranchName('')
+      setBranchDocIds([])
     } catch (err: any) {
       setBranchError(err?.message ?? 'Failed to create branch')
     }
@@ -448,13 +468,23 @@ export function SessionView({ session, onBack, onSettings }: Props) {
           {/* Project brief — the spec every branch's AI reads */}
           <button
             onClick={() => setBriefOpen(true)}
-            className="mx-2 my-2 rounded-lg border border-gray-800 px-2.5 py-2 text-left hover:bg-gray-800"
+            className="mx-2 mt-2 rounded-lg border border-gray-800 px-2.5 py-2 text-left hover:bg-gray-800"
           >
             <div className="text-xs font-semibold text-gray-300">Project brief</div>
             <div className="text-[10px] text-gray-500 truncate">
               {brief.brief ? brief.brief.split('\n').find((l) => l.trim()) : 'Add specs every branch sees'}
             </div>
           </button>
+
+          {/* Project docs */}
+          <ProjectDocs
+            sessionId={session.id}
+            sessionOwnerId={session.ownerId}
+            currentUserId={user?.id}
+            docs={docs}
+            onDocCreated={(doc) => setDocs((prev) => prev.find((d) => d.id === doc.id) ? prev : [...prev, doc])}
+            onDocDeleted={(id) => setDocs((prev) => prev.filter((d) => d.id !== id))}
+          />
 
           {/* Members — capped height so long lists don't push branches off screen */}
           <div className="px-3 py-2 border-b border-gray-800 max-h-36 overflow-y-auto">
@@ -482,9 +512,25 @@ export function SessionView({ session, onBack, onSettings }: Props) {
                   >
                     <div className="font-medium truncate">{b.name}</div>
                     <div className="text-gray-500 truncate">{b.model.split('/').pop()}</div>
-                    {b.ownerId === user?.id && !b.isMain && (
-                      <span className="text-blue-400 text-[10px]">yours</span>
-                    )}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {b.ownerId === user?.id && !b.isMain && (
+                        <span className="text-blue-400 text-[10px]">yours</span>
+                      )}
+                      {/* Pinned docs indicator / control */}
+                      {!b.isMain && docs.length > 0 && (
+                        b.ownerId === user?.id ? (
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); setPinnedPanelBranchId(b.id) }}
+                            className="text-[10px] text-gray-500 hover:text-gray-300"
+                          >
+                            Pinned docs ({b.pinnedDocIds.length})
+                          </button>
+                        ) : b.pinnedDocIds.length > 0 ? (
+                          <span className="text-[10px] text-gray-600">Pinned docs ({b.pinnedDocIds.length})</span>
+                        ) : null
+                      )}
+                    </div>
                   </button>
                 </li>
               ))}
@@ -544,6 +590,29 @@ export function SessionView({ session, onBack, onSettings }: Props) {
                   <button type="button" onClick={() => setBranchError(null)} className="ml-2 text-red-300 hover:text-red-200">✕</button>
                 </p>
               )}
+              {/* Pin docs to this branch */}
+              {docs.length > 0 && (
+                <div className="space-y-1">
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wide font-semibold">Pin docs to this branch</p>
+                  <div className="flex flex-wrap gap-x-3 gap-y-1">
+                    {docs.map((doc) => (
+                      <label key={doc.id} className="flex items-center gap-1 text-xs text-gray-400 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={branchDocIds.includes(doc.id)}
+                          onChange={(e) => {
+                            setBranchDocIds((prev) =>
+                              e.target.checked ? [...prev, doc.id] : prev.filter((id) => id !== doc.id)
+                            )
+                          }}
+                          className="accent-blue-500"
+                        />
+                        <span className="truncate max-w-[120px]">{doc.title}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="flex flex-wrap gap-2">
                 <input
                   type="text"
@@ -562,7 +631,7 @@ export function SessionView({ session, onBack, onSettings }: Props) {
                   ))}
                 </select>
                 <button type="submit" className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs hover:bg-blue-700">Branch</button>
-                <button type="button" onClick={() => { setBranchingFromMsg(null); setBranchError(null) }} className="rounded-lg bg-gray-700 px-3 py-1.5 text-xs hover:bg-gray-600">Cancel</button>
+                <button type="button" onClick={() => { setBranchingFromMsg(null); setBranchError(null); setBranchDocIds([]) }} className="rounded-lg bg-gray-700 px-3 py-1.5 text-xs hover:bg-gray-600">Cancel</button>
               </div>
             </form>
           )}
@@ -653,6 +722,57 @@ export function SessionView({ session, onBack, onSettings }: Props) {
           onClose={() => setBriefOpen(false)}
         />
       )}
+
+      {/* Pinned-docs panel — lets a branch owner change which docs are pinned */}
+      {pinnedPanelBranchId && (() => {
+        const pb = branches.find((b) => b.id === pinnedPanelBranchId)
+        if (!pb) return null
+        return (
+          <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4" onClick={() => setPinnedPanelBranchId(null)}>
+            <div
+              className="w-full max-w-sm rounded-xl border border-gray-700 bg-gray-900 shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-gray-800 px-4 py-3">
+                <h2 className="text-sm font-semibold">Pinned docs — {pb.name}</h2>
+                <button onClick={() => setPinnedPanelBranchId(null)} className="text-gray-500 hover:text-gray-300 text-sm px-2">✕</button>
+              </div>
+              <div className="px-4 py-3 space-y-2">
+                {docs.length === 0 ? (
+                  <p className="text-xs text-gray-500">No docs in this session yet.</p>
+                ) : (
+                  docs.map((doc) => {
+                    const pinned = pb.pinnedDocIds.includes(doc.id)
+                    return (
+                      <label key={doc.id} className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          defaultChecked={pinned}
+                          className="accent-blue-500"
+                          onChange={async (e) => {
+                            const next = e.target.checked
+                              ? [...pb.pinnedDocIds, doc.id]
+                              : pb.pinnedDocIds.filter((id) => id !== doc.id)
+                            try {
+                              const updated = await api.branches.update(pb.id, { pinnedDocIds: next })
+                              setBranches((prev) => prev.map((b) => b.id === updated.id ? updated : b))
+                            } catch (err: any) {
+                              // revert checkbox
+                              e.target.checked = pinned
+                            }
+                          }}
+                        />
+                        <span className="truncate">{doc.title}</span>
+                        <span className="text-gray-600 shrink-0">{doc.chars.toLocaleString()} chars</span>
+                      </label>
+                    )
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }
