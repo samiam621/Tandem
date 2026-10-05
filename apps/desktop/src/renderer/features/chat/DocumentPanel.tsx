@@ -45,7 +45,7 @@ export function DocumentPanel({ sessionId, doc, members, onSaved, onDeleted, onC
           onChange={(e) => setName(e.target.value)}
           maxLength={DOCUMENT_NAME_MAX}
           placeholder="Name, e.g. ARCHITECTURE.md"
-          className="w-72 rounded bg-gray-800 px-2 py-1 text-sm font-normal outline-none focus:ring-1 focus:ring-blue-500"
+          className="w-72 rounded bg-raised px-2 py-1 text-sm font-normal outline-none focus:ring-1 focus:ring-accent"
         />
       )}
       hint="Main’s AI reads every document; each branch reads the ones it selected"
@@ -56,7 +56,7 @@ export function DocumentPanel({ sessionId, doc, members, onSaved, onDeleted, onC
       startEditing={!doc}
       error={error}
       actions={doc && (
-        <button onClick={remove} onBlur={() => setConfirmDelete(false)} className="text-xs rounded-lg px-3 py-1.5 text-red-400 hover:bg-red-900/30">
+        <button onClick={remove} onBlur={() => setConfirmDelete(false)} className="text-xs rounded-lg px-3 py-1.5 text-danger hover:bg-danger/10">
           {confirmDelete ? 'Click again to delete' : 'Delete'}
         </button>
       )}

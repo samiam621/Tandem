@@ -6,6 +6,7 @@ Tandem is a multiplayer AI chat desktop app. It is an Electron client talking to
 
 - **[ARCHITECTURE.md](ARCHITECTURE.md)**: read it before starting a build step, and before touching the data model, message tree or AI context, auth flow, WebSocket events, presence, MCP tools, or Electron security settings. It also holds the **Current MVP contracts** and the **Build plan**.
 - **[README.md](README.md)**: setup, env vars, scripts, and the authoritative **REST endpoint table**.
+- **[FRONTEND.md](FRONTEND.md)**: frontend architecture, styling decisions, layout, and UI conventions. Read it before changing frontend structure or styling.
 
 ## Hard rules
 

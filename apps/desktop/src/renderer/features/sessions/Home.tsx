@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import type { Session } from '@tandem/shared'
 import { api } from '../../lib/api'
+import { Icon, TandemMark } from '../../components/Icon'
 import { useAuth } from '../../app/AuthContext'
 
 interface Props {
@@ -11,7 +12,7 @@ interface Props {
 }
 
 export function Home({ onOpenSession, onSettings, initialAction, onActionHandled }: Props) {
-  const { user, signOut } = useAuth()
+  const { user } = useAuth()
   const [sessions, setSessions] = useState<Session[]>([])
   const [models, setModels] = useState<{ id: string; name: string }[]>([])
   const [showNew, setShowNew] = useState(false)
@@ -106,95 +107,102 @@ export function Home({ onOpenSession, onSettings, initialAction, onActionHandled
   return (
     <div className="flex h-screen flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-gray-800 px-6 py-3">
-        <span className="font-bold text-lg">Tandem</span>
+      <div className="app-header justify-between">
+        <span className="flex items-center gap-2 font-medium"><TandemMark className="h-6 w-6" />Tandem</span>
         <div className="flex items-center gap-3">
-          <span className="text-sm text-gray-400">{user?.displayName}</span>
-          <button onClick={onSettings} className="text-xs text-gray-500 hover:text-gray-300">Settings</button>
+          <span className="text-sm text-secondary">{user?.displayName}</span>
+          <button onClick={onSettings} className="icon-button" aria-label="Settings" title="Settings"><Icon name="settings" /></button>
         </div>
       </div>
 
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
-        <div className="mx-auto w-full max-w-lg overflow-y-auto py-8 px-6 space-y-4">
+        <div className="mx-auto w-full max-w-2xl overflow-y-auto py-12 px-8 space-y-5">
+          <div className="mb-10">
+            <p className="mb-3 text-xs text-muted">Your workspace</p>
+            <h1 className="font-prose text-3xl">What will you build together?</h1>
+            <p className="mt-3 text-ui text-secondary">Pick up a conversation, or start something new with your team.</p>
+          </div>
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">Sessions</h2>
+            <h2 className="text-ui font-medium">Sessions</h2>
             <div className="flex gap-2">
               <button
                 onClick={() => { setShowJoin(!showJoin); setShowNew(false) }}
-                className="rounded-lg bg-gray-800 px-3 py-1.5 text-xs hover:bg-gray-700"
+                className="button-secondary py-1.5"
               >
                 Join
               </button>
               <button
                 onClick={() => { setShowNew(!showNew); setShowJoin(false) }}
-                className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs hover:bg-blue-700"
+                className="button-primary py-1.5"
               >
-                + New
+                <Icon name="plus" /> New session
               </button>
             </div>
           </div>
 
           {/* New session form */}
           {showNew && (
-            <form onSubmit={handleCreate} className="space-y-2 rounded-xl bg-gray-800 p-4">
+            <form onSubmit={handleCreate} className="space-y-3 rounded-xl border border-line bg-raised p-5">
               <input
                 autoFocus
                 type="text"
-                placeholder="Session title"
+                aria-label="Session title" placeholder="Session title"
                 value={newTitle}
                 onChange={(e) => setNewTitle(e.target.value)}
-                className="w-full rounded-lg bg-gray-700 px-3 py-2 text-sm outline-none ring-1 ring-gray-600 focus:ring-blue-500"
+                className="field w-full"
               />
               <select
                 value={newModel}
                 onChange={(e) => setNewModel(e.target.value)}
-                className="w-full rounded-lg bg-gray-700 px-3 py-2 text-sm outline-none ring-1 ring-gray-600"
+                aria-label="Default model" className="field w-full"
               >
                 {models.map((m) => (
                   <option key={m.id} value={m.id}>{m.name}</option>
                 ))}
               </select>
               <div className="flex gap-2">
-                <button type="button" onClick={() => setShowNew(false)} className="flex-1 rounded-lg bg-gray-700 py-2 text-xs hover:bg-gray-600">Cancel</button>
-                <button type="submit" disabled={loading} className="flex-1 rounded-lg bg-blue-600 py-2 text-xs hover:bg-blue-700 disabled:opacity-50">Create</button>
+                <button type="button" onClick={() => setShowNew(false)} className="flex-1 rounded-lg bg-selected py-2 text-xs hover:bg-hover">Cancel</button>
+                <button type="submit" disabled={loading} className="button-primary flex-1 py-2 text-xs">Create</button>
               </div>
             </form>
           )}
 
           {/* Join session form */}
           {showJoin && (
-            <form onSubmit={handleJoin} className="space-y-2 rounded-xl bg-gray-800 p-4">
+            <form onSubmit={handleJoin} className="space-y-3 rounded-xl border border-line bg-raised p-5">
               <input
                 autoFocus
                 type="text"
-                placeholder="Invite code"
+                aria-label="Invite code" placeholder="Invite code"
                 value={joinCode}
                 onChange={(e) => setJoinCode(e.target.value)}
-                className="w-full rounded-lg bg-gray-700 px-3 py-2 text-sm outline-none ring-1 ring-gray-600 focus:ring-blue-500"
+                className="field w-full"
               />
               <div className="flex gap-2">
-                <button type="button" onClick={() => setShowJoin(false)} className="flex-1 rounded-lg bg-gray-700 py-2 text-xs hover:bg-gray-600">Cancel</button>
-                <button type="submit" disabled={loading} className="flex-1 rounded-lg bg-blue-600 py-2 text-xs hover:bg-blue-700 disabled:opacity-50">Join</button>
+                <button type="button" onClick={() => setShowJoin(false)} className="flex-1 rounded-lg bg-selected py-2 text-xs hover:bg-hover">Cancel</button>
+                <button type="submit" disabled={loading} className="button-primary flex-1 py-2 text-xs">Join</button>
               </div>
             </form>
           )}
 
-          {error && <p className="text-sm text-red-400">{error}</p>}
+          {error && <p className="text-sm text-danger">{error}</p>}
 
           {/* Session list */}
           {sessions.length === 0 ? (
-            <p className="text-center text-sm text-gray-500 py-8">No sessions yet. Create one to get started.</p>
+            <p className="rounded-xl border border-dashed border-line px-6 py-12 text-center text-ui text-muted">No sessions yet. Create one to get started.</p>
           ) : (
-            <ul className="space-y-2">
+            <ul className="divide-y divide-line">
               {sessions.map((s) => (
                 <li key={s.id}>
                   <button
                     onClick={() => onOpenSession(s)}
-                    className="w-full text-left rounded-xl bg-gray-800 px-4 py-3 hover:bg-gray-700 transition-colors"
+                    className="group flex w-full items-center gap-4 rounded-lg px-3 py-4 text-left hover:bg-hover"
                   >
-                    <div className="font-medium">{s.title}</div>
-                    <div className="text-xs text-gray-400 mt-0.5">{s.defaultModel}</div>
+                    <Icon name="chat" className="h-5 w-5 shrink-0 text-muted" />
+                    <div className="min-w-0 flex-1"><div className="truncate font-medium">{s.title}</div>
+                    <div className="mt-1 truncate text-xs text-muted">{s.defaultModel.split('/').pop()}</div></div>
+                    <span className="text-muted opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100" aria-hidden="true">→</span>
                   </button>
                 </li>
               ))}

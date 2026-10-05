@@ -21,7 +21,7 @@ function Inner() {
 
   if (loading) {
     return (
-      <div className="flex h-screen items-center justify-center text-gray-400 text-sm">
+      <div className="flex h-screen items-center justify-center text-secondary text-sm">
         Loading…
       </div>
     )

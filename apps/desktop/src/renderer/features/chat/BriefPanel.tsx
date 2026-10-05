@@ -52,7 +52,7 @@ export function BriefPanel({ sessionId, current, members, onChange, onClose }: P
         <button
           onClick={refresh}
           disabled={refreshing}
-          className="text-xs rounded-lg bg-gray-700 px-3 py-1.5 hover:bg-gray-600 disabled:opacity-50"
+          className="text-xs rounded-lg bg-selected px-3 py-1.5 hover:bg-hover disabled:opacity-50"
         >
           {refreshing ? 'Summarizing main…' : 'Refresh from main'}
         </button>
