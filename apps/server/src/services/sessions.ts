@@ -134,6 +134,14 @@ export async function getSession(
   }
 }
 
+// ─── Lookup invite code (no auth required) ───────────────────────────────────
+
+export async function lookupInviteCode(inviteCode: string): Promise<boolean> {
+  const db = getDb()
+  const row = db.select({ id: sessions.id }).from(sessions).where(eq(sessions.inviteCode, inviteCode)).get()
+  return row !== undefined
+}
+
 // ─── Join session ─────────────────────────────────────────────────────────────
 
 export async function joinSession(
