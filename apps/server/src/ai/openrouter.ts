@@ -8,11 +8,12 @@ import { bus } from '../events.js'
 import { isFreeModelId } from '@tandem/shared'
 import { assertModelAllowed } from './models.js'
 import { buildChatContext } from './context.js'
+import { sessionDocs } from '../services/docs.js'
 
 // ─── Context builder ──────────────────────────────────────────────────────────
-// Loads the session's messages, speaker names and brief; the pure mapping lives in context.ts.
+// Loads the session's messages, speaker names, brief and project docs; the pure mapping lives in context.ts.
 
-function buildContext(sessionId: string, pendingMsgId: string) {
+function buildContext(sessionId: string, branch: typeof branches.$inferSelect, pendingMsgId: string) {
   const db = getDb()
   const rows = db.select().from(messages).where(eq(messages.sessionId, sessionId)).all()
   const authorIds = [...new Set(rows.map((m) => m.authorId))]
@@ -21,7 +22,12 @@ function buildContext(sessionId: string, pendingMsgId: string) {
       .map((u) => [u.id, u.name]),
   )
   const brief = db.select({ brief: sessions.brief }).from(sessions).where(eq(sessions.id, sessionId)).get()?.brief ?? ''
-  return buildChatContext(rows, pendingMsgId, nameById, brief)
+  const pinnedIds = new Set(branch.pinnedDocIds)
+  const docs = sessionDocs(sessionId)
+  return buildChatContext(rows, pendingMsgId, nameById, brief, {
+    pinned: docs.filter((d) => pinnedIds.has(d.id)),
+    others: docs.filter((d) => !pinnedIds.has(d.id)),
+  })
 }
 
 // ─── Summarize (Share to main) ────────────────────────────────────────────────
@@ -65,7 +71,7 @@ export async function generateReply(branchId: string, pendingMsgId: string, sess
     if (!isFreeModelId(branch.model)) {
       throw new Error('Only OpenRouter free models with the :free suffix are allowed.')
     }
-    const context = buildContext(sessionId, pendingMsgId)
+    const context = buildContext(sessionId, branch, pendingMsgId)
 
     const apiKey = process.env.OPENROUTER_API_KEY
     if (!apiKey) {

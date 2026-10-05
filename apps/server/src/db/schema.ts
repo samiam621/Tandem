@@ -44,6 +44,7 @@ export const branches = sqliteTable('branches', {
   forkMessageId: text('fork_message_id'),
   headMessageId: text('head_message_id'),
   createdAt: text('created_at').notNull(),
+  pinnedDocIds: text('pinned_doc_ids', { mode: 'json' }).$type<string[]>().notNull().default([]),
 })
 
 export const messages = sqliteTable('messages', {
@@ -58,6 +59,17 @@ export const messages = sqliteTable('messages', {
   model: text('model'),
   content: text('content').notNull().default(''),
   status: text('status', { enum: ['pending', 'streaming', 'done', 'error'] }).notNull().default('pending'),
+  createdAt: text('created_at').notNull(),
+})
+
+// Files uploaded to a session's project docs; content is the text (extracted, for a PDF).
+export const projectDocs = sqliteTable('project_docs', {
+  id: text('id').primaryKey(),
+  sessionId: text('session_id').notNull(),
+  title: text('title').notNull(),
+  kind: text('kind', { enum: ['text', 'pdf'] }).notNull(),
+  content: text('content').notNull(),
+  uploadedBy: text('uploaded_by').notNull(),
   createdAt: text('created_at').notNull(),
 })
 

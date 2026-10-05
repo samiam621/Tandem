@@ -8,6 +8,7 @@ import { sessionRoutes } from './routes/sessions.js'
 import { modelsRoute } from './routes/models.js'
 import { branchRoutes } from './routes/branches.js'
 import { messageRoutes } from './routes/messages.js'
+import { docRoutes } from './routes/docs.js'
 import { recoverStaleMessages } from './services/messages.js'
 import { wsHandler } from './ws/handler.js'
 import { tokenRoutes } from './routes/tokens.js'
@@ -36,6 +37,7 @@ await server.register(sessionRoutes)
 await server.register(modelsRoute)
 await server.register(branchRoutes)
 await server.register(messageRoutes)
+await server.register(docRoutes)
 await server.register(wsHandler)
 await server.register(tokenRoutes)
 await server.register(mcpHandler)

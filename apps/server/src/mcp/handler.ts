@@ -9,6 +9,7 @@ import { BRIEF_MAX_CHARS } from '@tandem/shared'
 import { getBranchMessages, postMessage, shareBranch } from '../services/messages.js'
 import { createBranch } from '../services/branches.js'
 import { waitForMentions, getBranchContext, setWorking } from '../services/agents.js'
+import { listDocs, getDoc, searchDocs } from '../services/docs.js'
 import { eq } from 'drizzle-orm'
 import { getDb } from '../db/index.js'
 import { messages, users } from '../db/schema.js'
@@ -112,7 +113,7 @@ function buildMcpServer(actor: Actor) {
   // ─── get_branch_context ───────────────────────────────────────────────────
   server.tool(
     'get_branch_context',
-    "Get everything you need before working on a branch: the session's project brief (specs, docs, decisions; always the latest version), the branch's whole conversation from the session's start through the fork point (oldest first), who owns it and which branch it split from, and the session's other branches. Call this after being mentioned and before replying, so you are on the same page as the team.",
+    "Get everything you need before working on a branch: the session's project brief (specs, docs, decisions; always the latest version), the list of project docs (branch.pinnedDocIds marks the ones pinned to this branch; read them with read_project_doc), the branch's whole conversation from the session's start through the fork point (oldest first), who owns it and which branch it split from, and the session's other branches. Call this after being mentioned and before replying, so you are on the same page as the team.",
     {
       branchId: z.string().describe('The branch ID'),
       limit: z.number().int().min(1).max(500).default(200).describe('Max messages to return (newest kept)'),
@@ -169,6 +170,48 @@ function buildMcpServer(actor: Actor) {
     },
   )
 
+  // ─── Project docs ─────────────────────────────────────────────────────────
+  // Service errors come back as { error } text, like update_brief.
+  const docTool = (fn: () => unknown) => {
+    try {
+      return { content: [{ type: 'text' as const, text: JSON.stringify(fn()) }] }
+    } catch (err: unknown) {
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }] }
+    }
+  }
+
+  server.tool(
+    'list_project_docs',
+    "List the session's project docs: files the team uploaded to main with specs, docs and decisions. Returns id, title, kind and size, not content. Use it to see what reference material exists before reading or searching it.",
+    { sessionId: z.string().describe('The session ID') },
+    async ({ sessionId }) => docTool(() => listDocs(actor, sessionId)),
+  )
+
+  server.tool(
+    'read_project_doc',
+    'Read a project doc by id, in slices for long docs. Use it when list_project_docs or search_project_docs points to a doc you need in full. Returns title, the text from offset, and totalChars so you can read the next slice.',
+    {
+      docId: z.string().describe('The doc ID'),
+      offset: z.number().int().min(0).default(0).describe('Character offset to start from'),
+      limit: z.number().int().min(1).max(20000).default(20000).describe('Max characters to return'),
+    },
+    async ({ docId, offset, limit }) => docTool(() => {
+      const { content, ...doc } = getDoc(actor, docId)
+      return { ...doc, offset, text: content.slice(offset, offset + limit), totalChars: content.length }
+    }),
+  )
+
+  server.tool(
+    'search_project_docs',
+    "Keyword-search the session's project docs and return the best-matching passages with their doc id and title. Use it when your branch is missing a spec, decision or detail that likely lives in main's docs, instead of guessing.",
+    {
+      sessionId: z.string().describe('The session ID'),
+      query: z.string().min(1).describe('Keywords for what you are looking for'),
+      k: z.number().int().min(1).max(10).default(5).describe('Max passages to return'),
+    },
+    async ({ sessionId, query, k }) => docTool(() => searchDocs(actor, sessionId, query, k)),
+  )
+
   // ─── create_branch ────────────────────────────────────────────────────────
   server.tool(
     'create_branch',
@@ -178,13 +221,19 @@ function buildMcpServer(actor: Actor) {
       // FreeModelIdSchema ensures only :free model IDs are accepted
       model: FreeModelIdSchema.describe('OpenRouter :free model ID for this branch'),
       name: z.string().optional().describe('Optional branch name'),
+      docIds: z.array(z.string()).max(100).optional().describe('Project doc IDs (from list_project_docs) to pin; the branch AI reads pinned docs in full'),
     },
-    async ({ fromMessageId, model, name }) => {
+    async ({ fromMessageId, model, name, docIds }) => {
       // No manual isFreeModelId check needed — FreeModelIdSchema handles it above
       const db = getDb()
       const msg = db.select().from(messages).where(eq(messages.id, fromMessageId)).get()
       if (!msg) return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'message_not_found' }) }] }
-      const branch = await createBranch(actor, msg.sessionId, fromMessageId, model, name)
+      let branch
+      try {
+        branch = await createBranch(actor, msg.sessionId, fromMessageId, model, name, docIds)
+      } catch (err: unknown) {
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }] }
+      }
       if (!branch) return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'not_found' }) }] }
       return { content: [{ type: 'text' as const, text: JSON.stringify(branch) }] }
     },

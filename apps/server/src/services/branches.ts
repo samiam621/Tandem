@@ -1,13 +1,13 @@
 import { nanoid } from 'nanoid'
-import { eq, and } from 'drizzle-orm'
+import { eq, and, inArray } from 'drizzle-orm'
 import { getDb } from '../db/index.js'
-import { branches, sessionMembers, messages } from '../db/schema.js'
+import { branches, sessionMembers, messages, projectDocs } from '../db/schema.js'
 import { bus } from '../events.js'
 import type { Branch } from '@tandem/shared'
 
 function now() { return new Date().toISOString() }
 
-function rowToBranch(row: typeof branches.$inferSelect): Branch {
+export function rowToBranch(row: typeof branches.$inferSelect): Branch {
   return {
     id: row.id,
     sessionId: row.sessionId,
@@ -18,7 +18,20 @@ function rowToBranch(row: typeof branches.$inferSelect): Branch {
     forkMessageId: row.forkMessageId ?? null,
     headMessageId: row.headMessageId ?? null,
     createdAt: row.createdAt,
+    pinnedDocIds: row.pinnedDocIds,
   }
+}
+
+// Throws 400 unless every id is a project doc in this session. Returns the ids without duplicates.
+function checkDocIds(sessionId: string, docIds: string[]): string[] {
+  const ids = [...new Set(docIds)]
+  if (!ids.length) return ids
+  const found = getDb().select({ id: projectDocs.id }).from(projectDocs)
+    .where(and(eq(projectDocs.sessionId, sessionId), inArray(projectDocs.id, ids))).all()
+  if (found.length !== ids.length) {
+    throw Object.assign(new Error('Unknown project doc for this session'), { code: 'invalid_request', status: 400 })
+  }
+  return ids
 }
 
 export async function createBranch(
@@ -27,6 +40,7 @@ export async function createBranch(
   fromMessageId: string,
   model: string,
   name?: string,
+  docIds: string[] = [],
 ): Promise<Branch | null> {
   const db = getDb()
 
@@ -42,6 +56,7 @@ export async function createBranch(
     .get()
   if (!forkMsg) return null
 
+  const pinnedDocIds = checkDocIds(sessionId, docIds)
   const branchId = nanoid()
   const ts = now()
   const branchName = name ?? `Branch ${ts.slice(11, 19)}`
@@ -56,6 +71,7 @@ export async function createBranch(
     forkMessageId: fromMessageId,
     headMessageId: fromMessageId, // starts at the fork point
     createdAt: ts,
+    pinnedDocIds,
   }).run()
 
   const branch = rowToBranch(db.select().from(branches).where(eq(branches.id, branchId)).get()!)
@@ -63,6 +79,30 @@ export async function createBranch(
   bus.emitSession(sessionId, { type: 'branch_created', payload: branch })
 
   return branch
+}
+
+// Owner only; main has no owner, so it can't be patched.
+export function updateBranch(
+  actor: { userId: string },
+  branchId: string,
+  changes: { name?: string; model?: string; pinnedDocIds?: string[] },
+): Branch {
+  const db = getDb()
+  const branch = db.select().from(branches).where(eq(branches.id, branchId)).get()
+  if (!branch) throw Object.assign(new Error('Branch not found'), { code: 'not_found', status: 404 })
+  if (branch.ownerId !== actor.userId) {
+    throw Object.assign(new Error('Only the owner can update this branch'), { code: 'forbidden', status: 403 })
+  }
+
+  const updates: Partial<typeof branches.$inferInsert> = {}
+  if (changes.name) updates.name = changes.name
+  if (changes.model) updates.model = changes.model
+  if (changes.pinnedDocIds) updates.pinnedDocIds = checkDocIds(branch.sessionId, changes.pinnedDocIds)
+  if (Object.keys(updates).length) db.update(branches).set(updates).where(eq(branches.id, branchId)).run()
+
+  const updated = rowToBranch(db.select().from(branches).where(eq(branches.id, branchId)).get()!)
+  bus.emitSession(branch.sessionId, { type: 'branch_updated', payload: updated })
+  return updated
 }
 
 export async function getSessionTree(actor: { userId: string }, sessionId: string) {

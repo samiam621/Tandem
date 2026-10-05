@@ -79,7 +79,8 @@ xattr -dr com.apple.quarantine /Applications/Tandem.app
 - **Server** (Fastify, `apps/server`): one shared service layer behind a REST API, a WebSocket for live updates (messages, presence, typing), and an MCP endpoint for agents. AI replies go through OpenRouter; the API key never leaves the server.
 - **Branches are a message tree.** Every message points to the one before it. An AI reply in a branch sees the path from the start of the session to that branch's latest message, never messages from sibling branches.
 - **The project brief** is one shared document per session for specs, docs, and decisions. Every branch's AI reads the latest version, even branches created before an edit.
-- **Agents** connect with a token (`tdm_…`) from Settings. Their MCP tools let them wait for @mentions, read a branch's full context, show "working…", post replies, share a branch to main, and update the project brief.
+- **Project docs** are files (text, markdown, code, or PDF) uploaded to the session. When you branch, tick the docs that part of the work needs: the branch's AI reads those in full. For every other doc, it gets the passages that best match the latest message, so a branch can still pull in what it is missing from main.
+- **Agents** connect with a token (`tdm_…`) from Settings. Their MCP tools let them wait for @mentions, read a branch's full context, show "working…", post replies, share a branch to main, update the project brief, and list, read, and search the project docs.
 
 Details: [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -193,8 +194,12 @@ Base path `/api`. Authenticate with `Authorization: Bearer <token>`. Bodies are 
 | PUT | `/api/sessions/:id/brief` | Any member replaces the project brief with `{ content, baseUpdatedAt }` (max 20,000 chars). `baseUpdatedAt` is the `briefUpdatedAt` the edit started from (`null` if never set); a mismatch returns `409 conflict`. Returns the session. |
 | GET | `/api/sessions/:id/agents` | Agent tokens owned by session members: `tokenId`, `label` (the @mention name), `ownerId`, `ownerName`, `active` (used in the last 5 min) |
 | GET | `/api/sessions/:id/branches` | All branches, with owner, model, fork point, and message count |
-| POST | `/api/sessions/:id/branches` | Create a branch from `{ fromMessageId, model, name? }`. `model` must be a `:free` id — returns `400` otherwise. |
-| PATCH | `/api/branches/:id` | Owner only: update `{ name?, model? }`. If `model` is provided it must be a `:free` id — returns `400` otherwise. |
+| POST | `/api/sessions/:id/branches` | Create a branch from `{ fromMessageId, model, name?, docIds? }`. `model` must be a `:free` id — returns `400` otherwise. `docIds` pins project docs of this session to the branch; an unknown id returns `400`. |
+| PATCH | `/api/branches/:id` | Owner only: update `{ name?, model?, pinnedDocIds? }`. If `model` is provided it must be a `:free` id — returns `400` otherwise. `pinnedDocIds` replaces the branch's pinned docs. |
+| GET | `/api/sessions/:id/docs` | The session's project docs, without content: `id`, `title`, `kind` (`text` \| `pdf`), `chars`, `uploadedBy`, `createdAt` |
+| POST | `/api/sessions/:id/docs` | Any member uploads `{ title, text }` (max 200,000 chars) or `{ title, pdfBase64 }` (max 10 MB; the server stores the extracted text, `400` if there is none). Returns the doc without content. |
+| GET | `/api/docs/:id` | One project doc with its full `content` |
+| DELETE | `/api/docs/:id` | The uploader or the session owner deletes a doc. It is unpinned from every branch. `204`. |
 | GET | `/api/branches/:id/messages` | Full message path for the branch, root to head |
 | POST | `/api/branches/:id/messages` | Send `{ content, triggerAi? = true }`. Returns the user message and the pending assistant message ID. The reply streams over WebSocket. A message that @mentions a session agent's label is saved as a mention and gets no built-in AI reply. |
 | POST | `/api/branches/:id/share` | Branch owner only. Posts an AI summary of the branch's own messages into main (`sharedFromBranchId` = the branch) and returns that message. `400` for main or an empty branch. |
