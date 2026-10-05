@@ -1,5 +1,17 @@
 import { z } from 'zod'
 
+// ─── Free model helpers ───────────────────────────────────────────────────────
+
+// Returns true only if the model ID ends with the `:free` variant suffix.
+// OpenRouter free models always carry this suffix, e.g. "meta-llama/llama-3.3-70b-instruct:free".
+export function isFreeModelId(modelId: string): boolean {
+  return modelId.endsWith(':free')
+}
+
+// Zod schema that validates a model ID is both non-empty and a free model.
+// Used anywhere a model field is accepted (session create, branch create/patch).
+export const FreeModelIdSchema = z.string().min(1).refine(isFreeModelId, 'Select an OpenRouter model with the :free suffix.')
+
 // ─── Domain types ────────────────────────────────────────────────────────────
 
 export type UserKind = 'github' | 'guest' | 'agent'
@@ -85,7 +97,8 @@ export const ExchangeCodeSchema = z.object({
 
 export const CreateSessionSchema = z.object({
   title: z.string().min(1).max(128),
-  defaultModel: z.string().min(1),
+  // Must be an OpenRouter :free model — rejected at 400 if not
+  defaultModel: FreeModelIdSchema,
 })
 
 export const JoinSessionSchema = z.object({
@@ -94,13 +107,15 @@ export const JoinSessionSchema = z.object({
 
 export const CreateBranchSchema = z.object({
   fromMessageId: z.string().min(1),
-  model: z.string().min(1),
+  // Must be an OpenRouter :free model — rejected at 400 if not
+  model: FreeModelIdSchema,
   name: z.string().min(1).max(64).optional(),
 })
 
 export const UpdateBranchSchema = z.object({
   name: z.string().min(1).max(64).optional(),
-  model: z.string().min(1).optional(),
+  // When provided, must be an OpenRouter :free model — rejected at 400 if not
+  model: FreeModelIdSchema.optional(),
 })
 
 export const PostMessageSchema = z.object({

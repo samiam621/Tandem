@@ -3,6 +3,9 @@ import OpenAI from 'openai'
 import { getDb } from '../db/index.js'
 import { messages, branches, users, sessions } from '../db/schema.js'
 import { bus } from '../events.js'
+// isFreeModelId is the backstop guard — even if a stored model somehow passed validation,
+// this ensures we never call a paid model. Source of truth lives in @tandem/shared.
+import { isFreeModelId } from '@tandem/shared'
 import { assertModelAllowed } from './models.js'
 import { buildChatContext } from './context.js'
 
@@ -29,6 +32,9 @@ Use bullet points and stay under 150 words. Do not invent details that are not i
 
 // One-shot (non-streaming) summary of a transcript, using the branch's model.
 export async function summarize(model: string, transcript: string): Promise<string> {
+  if (!isFreeModelId(model)) {
+    throw new Error('Only OpenRouter free models with the :free suffix are allowed.')
+  }
   const apiKey = process.env.OPENROUTER_API_KEY
   if (!apiKey) return `[Dev mode: no OPENROUTER_API_KEY set. Model: ${model}. Summary of ${transcript.split('\n').length} messages would appear here.]`
 
@@ -56,6 +62,9 @@ export async function generateReply(branchId: string, pendingMsgId: string, sess
   db.update(messages).set({ status: 'streaming' }).where(eq(messages.id, pendingMsgId)).run()
 
   try {
+    if (!isFreeModelId(branch.model)) {
+      throw new Error('Only OpenRouter free models with the :free suffix are allowed.')
+    }
     const context = buildContext(sessionId, pendingMsgId)
 
     const apiKey = process.env.OPENROUTER_API_KEY

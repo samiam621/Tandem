@@ -23,11 +23,12 @@ function rowToBranch(row: typeof branches.$inferSelect): Branch {
 }
 
 export const branchRoutes: FastifyPluginAsync = async (app) => {
-  // PATCH /api/branches/:id
+  // PATCH /api/branches/:id — UpdateBranchSchema.model uses FreeModelIdSchema, so paid models are rejected by Zod
   app.patch('/api/branches/:id', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const body = UpdateBranchSchema.safeParse(req.body)
     if (!body.success) {
+      // Zod failures include the :free check, so the code is always invalid_request
       return reply.code(400).send({ error: { code: 'invalid_request', message: body.error.message } })
     }
 

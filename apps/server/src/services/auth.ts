@@ -32,7 +32,8 @@ export async function guestAuth(displayName: string, deviceId: string): Promise<
 
   let user: typeof users.$inferSelect
   if (existing) {
-    user = existing
+    db.update(users).set({ displayName }).where(eq(users.deviceId, deviceId)).run()
+    user = db.select().from(users).where(eq(users.deviceId, deviceId)).get()!
   } else {
     const id = nanoid()
     db.insert(users).values({

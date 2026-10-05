@@ -108,11 +108,22 @@ describe('REST integration', () => {
     expect(res.statusCode).toBe(401)
   })
 
+  it('POST /api/sessions rejects paid model IDs', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/api/sessions',
+      headers: { authorization: 'Bearer ' + token },
+      payload: { title: 'Paid Model Session', defaultModel: 'openai/gpt-4o-mini' },
+    })
+    expect(res.statusCode).toBe(400)
+    // FreeModelIdSchema is part of the Zod shape now, so the error code is invalid_request
+    expect(res.json().error.code).toBe('invalid_request')
+  })
+
   it('POST /api/sessions → 201 with session + mainBranch', async () => {
     const res = await app.inject({
       method: 'POST', url: '/api/sessions',
       headers: { authorization: `Bearer ${token}` },
-      payload: { title: 'Test Session', defaultModel: 'openai/gpt-4o-mini' },
+      payload: { title: 'Test Session', defaultModel: 'openai/gpt-4o-mini:free' },
     })
     expect(res.statusCode).toBe(201)
     const body = res.json()
@@ -267,7 +278,7 @@ describe('REST integration', () => {
     const forkMsg = mainMsgs.find((m: any) => m.content === 'Hello integration test!')
     const branch = (await app.inject({
       method: 'POST', url: `/api/sessions/${sessionId}/branches`, headers: auth,
-      payload: { fromMessageId: forkMsg.id, model: 'test-model', name: 'bugfix' },
+      payload: { fromMessageId: forkMsg.id, model: 'test-model:free', name: 'bugfix' },
     })).json()
     bugfixBranchId = branch.id
     await app.inject({
@@ -309,7 +320,7 @@ describe('REST integration', () => {
     const mainMsgs = (await app.inject({ method: 'GET', url: `/api/branches/${mainBranchId}/messages`, headers: auth })).json()
     const empty = (await app.inject({
       method: 'POST', url: `/api/sessions/${sessionId}/branches`, headers: auth,
-      payload: { fromMessageId: mainMsgs[0].id, model: 'test-model', name: 'empty' },
+      payload: { fromMessageId: mainMsgs[0].id, model: 'test-model:free', name: 'empty' },
     })).json()
     const res = await app.inject({ method: 'POST', url: `/api/branches/${empty.id}/share`, headers: auth })
     expect(res.statusCode).toBe(400)

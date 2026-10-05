@@ -13,6 +13,8 @@ import { waitForMentions, getBranchContext, setWorking } from '../services/agent
 import { eq } from 'drizzle-orm'
 import { getDb } from '../db/index.js'
 import { messages, users } from '../db/schema.js'
+import { fetchFreeModels } from '../ai/models.js'
+import { FreeModelIdSchema } from '@tandem/shared'
 
 // Build a new McpServer per request with the actor closed over.
 // This is stateless mode — no session persistence across requests.
@@ -174,10 +176,12 @@ function buildMcpServer(actor: Actor) {
     'Create a new branch from a specific message.',
     {
       fromMessageId: z.string().describe('The message ID to branch from'),
-      model: z.string().describe('AI model ID for this branch'),
+      // FreeModelIdSchema ensures only :free model IDs are accepted
+      model: FreeModelIdSchema.describe('OpenRouter :free model ID for this branch'),
       name: z.string().optional().describe('Optional branch name'),
     },
     async ({ fromMessageId, model, name }) => {
+      // No manual isFreeModelId check needed — FreeModelIdSchema handles it above
       const db = getDb()
       const msg = db.select().from(messages).where(eq(messages.id, fromMessageId)).get()
       if (!msg) return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'message_not_found' }) }] }
@@ -190,13 +194,14 @@ function buildMcpServer(actor: Actor) {
   // ─── list_models ──────────────────────────────────────────────────────────
   server.tool(
     'list_models',
-    'List available AI models that can be used when creating branches or sessions.',
+    'List free AI models that can be used when creating branches or sessions.',
     {},
     async () => {
-      try {
-        return { content: [{ type: 'text' as const, text: JSON.stringify(await listModels()) }] }
-      } catch {
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'upstream_error' }) }] }
+      return {
+        content: [{
+          type: 'text' as const,
+          text: JSON.stringify(await fetchFreeModels()),
+        }],
       }
     },
   )

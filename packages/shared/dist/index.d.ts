@@ -1,4 +1,6 @@
 import { z } from 'zod';
+export declare function isFreeModelId(modelId: string): boolean;
+export declare const FreeModelIdSchema: z.ZodEffects<z.ZodString, string, string>;
 export type UserKind = 'github' | 'guest' | 'agent';
 export type AuthorType = 'user' | 'assistant' | 'agent';
 export type MessageStatus = 'pending' | 'streaming' | 'done' | 'error';
@@ -80,7 +82,7 @@ export declare const ExchangeCodeSchema: z.ZodObject<{
 }>;
 export declare const CreateSessionSchema: z.ZodObject<{
     title: z.ZodString;
-    defaultModel: z.ZodString;
+    defaultModel: z.ZodEffects<z.ZodString, string, string>;
 }, "strip", z.ZodTypeAny, {
     title: string;
     defaultModel: string;
@@ -97,7 +99,7 @@ export declare const JoinSessionSchema: z.ZodObject<{
 }>;
 export declare const CreateBranchSchema: z.ZodObject<{
     fromMessageId: z.ZodString;
-    model: z.ZodString;
+    model: z.ZodEffects<z.ZodString, string, string>;
     name: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
     fromMessageId: string;
@@ -110,13 +112,13 @@ export declare const CreateBranchSchema: z.ZodObject<{
 }>;
 export declare const UpdateBranchSchema: z.ZodObject<{
     name: z.ZodOptional<z.ZodString>;
-    model: z.ZodOptional<z.ZodString>;
+    model: z.ZodOptional<z.ZodEffects<z.ZodString, string, string>>;
 }, "strip", z.ZodTypeAny, {
-    model?: string | undefined;
     name?: string | undefined;
+    model?: string | undefined;
 }, {
-    model?: string | undefined;
     name?: string | undefined;
+    model?: string | undefined;
 }>;
 export declare const PostMessageSchema: z.ZodObject<{
     content: z.ZodString;

@@ -167,16 +167,16 @@ Base path `/api`. Authenticate with `Authorization: Bearer <token>`. Bodies are 
 | POST | `/api/auth/exchange` | Trade `{ code }` for a token. Each code works once and expires after 60 s. |
 | POST | `/api/auth/logout` | Revoke the current token |
 | GET | `/api/me` | Current user |
-| GET | `/api/models` | Available models (cached for 1 h) |
-| POST | `/api/sessions` | Create a session from `{ title, defaultModel }`. Returns the session, main branch, and invite. |
+| GET | `/api/models` | OpenRouter free models (`:free` ids only), cached for 1 h |
+| POST | `/api/sessions` | Create a session from `{ title, defaultModel }`. `defaultModel` must be a `:free` id — returns `400` otherwise. Returns the session, main branch, and invite. |
 | GET | `/api/sessions` | Sessions you belong to |
 | GET | `/api/sessions/:id` | Session details, members with online status, online count |
 | POST | `/api/sessions/join` | Join with `{ inviteCode }` |
 | PUT | `/api/sessions/:id/brief` | Any member replaces the project brief with `{ content, baseUpdatedAt }` (max 20,000 chars). `baseUpdatedAt` is the `briefUpdatedAt` the edit started from (`null` if never set); a mismatch returns `409 conflict`. Returns the session. |
 | GET | `/api/sessions/:id/agents` | Agent tokens owned by session members: `tokenId`, `label` (the @mention name), `ownerId`, `ownerName`, `active` (used in the last 5 min) |
 | GET | `/api/sessions/:id/branches` | All branches, with owner, model, fork point, and message count |
-| POST | `/api/sessions/:id/branches` | Create a branch from `{ fromMessageId, model, name? }` |
-| PATCH | `/api/branches/:id` | Owner only: update `{ name?, model? }` |
+| POST | `/api/sessions/:id/branches` | Create a branch from `{ fromMessageId, model, name? }`. `model` must be a `:free` id — returns `400` otherwise. |
+| PATCH | `/api/branches/:id` | Owner only: update `{ name?, model? }`. If `model` is provided it must be a `:free` id — returns `400` otherwise. |
 | GET | `/api/branches/:id/messages` | Full message path for the branch, root to head |
 | POST | `/api/branches/:id/messages` | Send `{ content, triggerAi? = true }`. Returns the user message and the pending assistant message ID. The reply streams over WebSocket. A message that @mentions a session agent's label is saved as a mention and gets no built-in AI reply. |
 | POST | `/api/branches/:id/share` | Branch owner only. Posts an AI summary of the branch's own messages into main (`sharedFromBranchId` = the branch) and returns that message. `400` for main or an empty branch. |
