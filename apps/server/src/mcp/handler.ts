@@ -8,7 +8,6 @@ import { listSessions, getSession, getSessionBranches, updateBrief } from '../se
 import { BRIEF_MAX_CHARS } from '@tandem/shared'
 import { getBranchMessages, postMessage, shareBranch } from '../services/messages.js'
 import { createBranch } from '../services/branches.js'
-import { listModels } from '../ai/models.js'
 import { waitForMentions, getBranchContext, setWorking } from '../services/agents.js'
 import { eq } from 'drizzle-orm'
 import { getDb } from '../db/index.js'

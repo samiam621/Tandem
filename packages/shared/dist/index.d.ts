@@ -114,11 +114,11 @@ export declare const UpdateBranchSchema: z.ZodObject<{
     name: z.ZodOptional<z.ZodString>;
     model: z.ZodOptional<z.ZodEffects<z.ZodString, string, string>>;
 }, "strip", z.ZodTypeAny, {
-    name?: string | undefined;
     model?: string | undefined;
+    name?: string | undefined;
 }, {
-    name?: string | undefined;
     model?: string | undefined;
+    name?: string | undefined;
 }>;
 export declare const PostMessageSchema: z.ZodObject<{
     content: z.ZodString;

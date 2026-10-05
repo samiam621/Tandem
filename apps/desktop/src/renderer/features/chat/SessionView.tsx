@@ -438,7 +438,7 @@ export function SessionView({ session, onBack, onSettings }: Props) {
           <div className="px-3 py-1.5 border-b border-gray-800 flex items-center justify-between">
             <span className="text-[10px] text-gray-600 uppercase tracking-wide font-semibold">Invite</span>
             <button
-              onClick={() => window.tandem.writeText(`tandem://join/${session.inviteCode}`)}
+              onClick={() => window.tandem.writeText(`${serverUrl}/api/sessions/join/${session.inviteCode}`)}
               className="text-[10px] text-gray-400 hover:text-gray-200 rounded px-1.5 py-0.5 hover:bg-gray-800"
             >
               Copy link

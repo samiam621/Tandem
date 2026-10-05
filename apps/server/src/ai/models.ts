@@ -17,6 +17,13 @@ const DEV_FREE_MODELS: OpenRouterModel[] = [
 // import both packages — but the authoritative source is @tandem/shared.
 export { isFreeModelId }
 
+// Call before every OpenRouter completion
+export function assertModelAllowed(modelId: string): void {
+  if (!isFreeModelId(modelId)) {
+    throw new Error(`Paid model "${modelId}" is blocked. Pick a :free model.`)
+  }
+}
+
 // Fetches the list of all OpenRouter models and keeps only the free ones.
 // Falls back to DEV_FREE_MODELS when no API key is configured (local dev).
 export async function fetchFreeModels(): Promise<OpenRouterModel[]> {

@@ -8,6 +8,7 @@ import {
   joinSession,
   getSessionBranches,
   listSessionAgents,
+  lookupInviteCode,
   updateBrief,
 } from '../services/sessions.js'
 import { createBranch, getSessionTree } from '../services/branches.js'
@@ -36,6 +37,28 @@ export const sessionRoutes: FastifyPluginAsync = async (app) => {
     const data = await getSession(req.actor!, id)
     if (!data) return reply.code(404).send({ error: { code: 'not_found', message: 'Session not found' } })
     return reply.send(data)
+  })
+
+  // GET /api/sessions/join/:code — browser-friendly invite link; redirects into the desktop app
+  app.get('/api/sessions/join/:code', async (req, reply) => {
+    const { code } = req.params as { code: string }
+    const exists = await lookupInviteCode(code)
+    if (!exists) return reply.code(404).send({ error: { code: 'not_found', message: 'Invalid invite code' } })
+
+    const deepLink = `tandem://join/${code}`
+    const publicUrl = process.env.PUBLIC_URL ?? 'http://localhost:3000'
+    const html = `<!DOCTYPE html>
+<html>
+<head><title>Join Tandem session</title></head>
+<body style="font-family:system-ui;max-width:480px;margin:80px auto;padding:20px">
+<h2>Opening Tandem…</h2>
+<p>If the app doesn't open automatically, copy this code and paste it into <strong>Tandem → Join</strong>:</p>
+<code style="font-size:1.2em;background:#f0f0f0;padding:8px 16px;border-radius:4px;display:inline-block;margin:16px 0">${code}</code>
+<p><a href="${deepLink}">Open Tandem</a></p>
+<script>window.location.href = "${deepLink}"</script>
+</body>
+</html>`
+    return reply.header('Content-Type', 'text/html').send(html)
   })
 
   // POST /api/sessions/join

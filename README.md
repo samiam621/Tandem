@@ -171,6 +171,7 @@ Base path `/api`. Authenticate with `Authorization: Bearer <token>`. Bodies are 
 | POST | `/api/sessions` | Create a session from `{ title, defaultModel }`. `defaultModel` must be a `:free` id — returns `400` otherwise. Returns the session, main branch, and invite. |
 | GET | `/api/sessions` | Sessions you belong to |
 | GET | `/api/sessions/:id` | Session details, members with online status, online count |
+| GET | `/api/sessions/join/:code` | Browser-friendly invite link — validates the code and returns an HTML page that auto-redirects to `tandem://join/<code>` with a paste-code fallback. No auth required. |
 | POST | `/api/sessions/join` | Join with `{ inviteCode }` |
 | PUT | `/api/sessions/:id/brief` | Any member replaces the project brief with `{ content, baseUpdatedAt }` (max 20,000 chars). `baseUpdatedAt` is the `briefUpdatedAt` the edit started from (`null` if never set); a mismatch returns `409 conflict`. Returns the session. |
 | GET | `/api/sessions/:id/agents` | Agent tokens owned by session members: `tokenId`, `label` (the @mention name), `ownerId`, `ownerName`, `active` (used in the last 5 min) |
