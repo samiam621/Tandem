@@ -137,7 +137,7 @@ export function SessionView({ session, onBack, onSettings }: Props) {
         break
       case 'branch_created':
         if (event.payload.sessionId === session.id) {
-          setBranches((prev) => [...prev, event.payload])
+          setBranches((prev) => prev.find((b) => b.id === event.payload.id) ? prev : [...prev, event.payload])
           // Pre-seed an empty entry so the tree node appears immediately
           setAllMessages((prev) => {
             if (prev.has(event.payload.id)) return prev
@@ -482,6 +482,7 @@ export function SessionView({ session, onBack, onSettings }: Props) {
             sessionOwnerId={session.ownerId}
             currentUserId={user?.id}
             docs={docs}
+            members={members}
             onDocCreated={(doc) => setDocs((prev) => prev.find((d) => d.id === doc.id) ? prev : [...prev, doc])}
             onDocDeleted={(id) => setDocs((prev) => prev.filter((d) => d.id !== id))}
           />
@@ -728,54 +729,86 @@ export function SessionView({ session, onBack, onSettings }: Props) {
         const pb = branches.find((b) => b.id === pinnedPanelBranchId)
         if (!pb) return null
         return (
-          <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4" onClick={() => setPinnedPanelBranchId(null)}>
-            <div
-              className="w-full max-w-sm rounded-xl border border-gray-700 bg-gray-900 shadow-xl"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between border-b border-gray-800 px-4 py-3">
-                <h2 className="text-sm font-semibold">Pinned docs — {pb.name}</h2>
-                <button onClick={() => setPinnedPanelBranchId(null)} className="text-gray-500 hover:text-gray-300 text-sm px-2">✕</button>
-              </div>
-              <div className="px-4 py-3 space-y-2">
-                {docs.length === 0 ? (
-                  <p className="text-xs text-gray-500">No docs in this session yet.</p>
-                ) : (
-                  docs.map((doc) => {
-                    const pinned = pb.pinnedDocIds.includes(doc.id)
-                    return (
-                      <label key={doc.id} className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          defaultChecked={pinned}
-                          className="accent-blue-500"
-                          onChange={async (e) => {
-                            const next = e.target.checked
-                              ? [...pb.pinnedDocIds, doc.id]
-                              : pb.pinnedDocIds.filter((id) => id !== doc.id)
-                            try {
-                              const updated = await api.branches.update(pb.id, { pinnedDocIds: next })
-                              setBranches((prev) => prev.map((b) => b.id === updated.id ? updated : b))
-                            } catch (err: any) {
-                              // revert checkbox
-                              e.target.checked = pinned
-                            }
-                          }}
-                        />
-                        <span className="truncate">{doc.title}</span>
-                        <span className="text-gray-600 shrink-0">{doc.chars.toLocaleString()} chars</span>
-                      </label>
-                    )
-                  })
-                )}
-              </div>
-            </div>
-          </div>
+          <PinnedDocsPanel
+            branch={pb}
+            docs={docs}
+            onClose={() => setPinnedPanelBranchId(null)}
+            onBranchUpdated={(updated) => setBranches((prev) => prev.map((b) => b.id === updated.id ? updated : b))}
+          />
         )
       })()}
     </div>
   )
 }
+
+
+// ─── PinnedDocsPanel ──────────────────────────────────────────────────────────
+// Controlled checklist that saves each toggle immediately. Disables all inputs
+// while a PATCH is in flight so rapid clicks don't cause races.
+
+function PinnedDocsPanel({
+  branch, docs, onClose, onBranchUpdated,
+}: {
+  branch: Branch
+  docs: import('@tandem/shared').ProjectDocMeta[]
+  onClose: () => void
+  onBranchUpdated: (b: Branch) => void
+}) {
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function toggle(docId: string, checked: boolean) {
+    const next = checked
+      ? [...branch.pinnedDocIds, docId]
+      : branch.pinnedDocIds.filter((id) => id !== docId)
+    setSaving(true)
+    setError(null)
+    try {
+      const updated = await api.branches.update(branch.id, { pinnedDocIds: next })
+      onBranchUpdated(updated)
+    } catch (err: any) {
+      setError(err?.message ?? 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+      <div
+        className="w-full max-w-sm rounded-xl border border-gray-700 bg-gray-900 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-gray-800 px-4 py-3">
+          <h2 className="text-sm font-semibold">Pinned docs — {branch.name}</h2>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-sm px-2">✕</button>
+        </div>
+        <div className="px-4 py-3 space-y-2">
+          {error && <p className="text-xs text-red-400">{error}</p>}
+          {docs.length === 0 ? (
+            <p className="text-xs text-gray-500">No docs in this session yet.</p>
+          ) : (
+            docs.map((doc) => (
+              <label key={doc.id} className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={branch.pinnedDocIds.includes(doc.id)}
+                  disabled={saving}
+                  className="accent-blue-500 disabled:opacity-50"
+                  onChange={(e) => toggle(doc.id, e.target.checked)}
+                />
+                <span className="truncate">{doc.title}</span>
+                <span className="text-gray-600 shrink-0">{doc.chars.toLocaleString()} chars</span>
+              </label>
+            ))
+          )}
+          {saving && <p className="text-[10px] text-gray-500">Saving…</p>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 
 function MessageRow({
   msg, currentUserId, members, branches, mentionLabelSet, onBranchFrom, onOpenBranch,

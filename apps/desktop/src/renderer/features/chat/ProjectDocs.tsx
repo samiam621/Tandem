@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react'
 import { DOC_UPLOAD_MAX_BYTES } from '@tandem/shared'
-import type { ProjectDocMeta, ProjectDoc } from '@tandem/shared'
+import type { ProjectDocMeta, ProjectDoc, User } from '@tandem/shared'
 import { api } from '../../lib/api'
 
 interface Props {
@@ -8,6 +8,7 @@ interface Props {
   sessionOwnerId: string
   currentUserId: string | undefined
   docs: ProjectDocMeta[]
+  members: User[]
   onDocCreated: (doc: ProjectDocMeta) => void
   onDocDeleted: (docId: string) => void
 }
@@ -96,7 +97,7 @@ function DocViewer({ meta, sessionOwnerId, currentUserId, onClose, onDeleted }: 
 
 // ─── Main card ────────────────────────────────────────────────────────────────
 
-export function ProjectDocs({ sessionId, sessionOwnerId, currentUserId, docs, onDocCreated, onDocDeleted }: Props) {
+export function ProjectDocs({ sessionId, sessionOwnerId, currentUserId, docs, members, onDocCreated, onDocDeleted }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
@@ -177,19 +178,23 @@ export function ProjectDocs({ sessionId, sessionOwnerId, currentUserId, docs, on
           <p className="px-2.5 py-2 text-[10px] text-gray-600">No docs yet. Upload a file to give every branch's AI shared context.</p>
         ) : (
           <ul>
-            {docs.map((doc) => (
-              <li key={doc.id}>
-                <button
-                  onClick={() => setViewingDoc(doc)}
-                  className="w-full text-left px-2.5 py-1.5 hover:bg-gray-800 group"
-                >
-                  <div className="text-[11px] text-gray-300 truncate group-hover:text-white">{doc.title}</div>
-                  <div className="text-[10px] text-gray-600">
-                    {doc.kind === 'pdf' ? 'PDF · ' : ''}{doc.chars.toLocaleString()} chars
-                  </div>
-                </button>
-              </li>
-            ))}
+            {docs.map((doc) => {
+              const uploaderName = members.find((m) => m.id === doc.uploadedBy)?.displayName
+              return (
+                <li key={doc.id}>
+                  <button
+                    onClick={() => setViewingDoc(doc)}
+                    className="w-full text-left px-2.5 py-1.5 hover:bg-gray-800 group"
+                  >
+                    <div className="text-[11px] text-gray-300 truncate group-hover:text-white">{doc.title}</div>
+                    <div className="text-[10px] text-gray-600">
+                      {doc.kind === 'pdf' ? 'PDF · ' : ''}{doc.chars.toLocaleString()} chars
+                      {uploaderName ? ` · ${uploaderName}` : ''}
+                    </div>
+                  </button>
+                </li>
+              )
+            })}
           </ul>
         )}
       </div>
