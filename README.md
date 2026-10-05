@@ -10,6 +10,23 @@ Not sure which Mac you have? Apple menu → **About This Mac**: "Apple M1/M2/M3/
 
 The app connects to our hosted server automatically. There is nothing to configure.
 
+> [!WARNING]
+> **The hosted server runs on Render's free plan — all data is temporary.**
+> The free instance starts with an empty database on every deploy. After **15 minutes of inactivity** the instance shuts down, and when it wakes up the database is wiped again. Everything stored on the server is lost on each restart:
+>
+> | Table | What is lost |
+> |---|---|
+> | `users` | All accounts (guest and GitHub) |
+> | `sessions` | Every chat session and its title |
+> | `session_members` | Who belongs to which session |
+> | `branches` | All branches off any session |
+> | `messages` | Every message in every branch |
+> | `api_tokens` | All agent tokens (e.g. Claude's `tdm_…` token) |
+> | `message_mentions` | The @mention log used by agents |
+>
+> **After any restart:** sign in again with a new guest name, recreate your sessions, and if you use an AI agent, go to **Settings → Connect an agent** to generate a fresh token.
+> To keep data permanently, deploy your own instance on a paid plan with a persistent disk (see [Deploy the server](#deploy-the-server)).
+
 ---
 
 ## Install
@@ -50,7 +67,7 @@ xattr -dr com.apple.quarantine /Applications/Tandem.app
 
 ### Good to know
 
-- **Free hosting:** the server sleeps after 15 minutes without use. The next start takes about a minute, and **sessions and accounts are reset**, so sign in again and recreate Claude's token if needed.
+- **Free hosting — data is temporary:** the server sleeps after 15 minutes without use and wipes its database on every wake-up or deploy. The next cold start takes about a minute. Sign in again with a new guest name, recreate your sessions, and regenerate Claude's agent token after each restart.
 - **Sign-in:** use **Continue as guest**. GitHub sign-in is not configured on the hosted server.
 - **Invite links** open the app directly only from an installed build; pasting the code always works.
 
@@ -151,7 +168,7 @@ Deploy `apps/server` to Render, Railway, or Fly.io. The host needs to support We
 | Start command | `cd apps/server && npx tsx src/index.ts` |
 | Env | `TOKEN_SECRET` (random 32-byte hex), `PUBLIC_URL`, `DATABASE_URL=file:./tandem.db`, `NODE_VERSION=22`, `ELECTRON_SKIP_BINARY_DOWNLOAD=1`, and `OPENROUTER_API_KEY` for real AI replies |
 
-On Render's free plan the service sleeps after 15 minutes without traffic, and every restart or deploy **wipes the SQLite database**: users must sign in again and agent tokens must be recreated. For data that survives, use a paid instance with a persistent disk and point `DATABASE_URL` at it (for example `file:/var/data/tandem.db`).
+**Render free plan — ephemeral storage:** the service sleeps after 15 minutes without traffic. Every wake-up and every deploy starts from an **empty SQLite database**. All tables are wiped — `users`, `sessions`, `session_members`, `branches`, `messages`, `api_tokens`, and `message_mentions`. Users must sign in again, sessions must be recreated, and agent tokens must be regenerated after every restart. For persistent data, upgrade to a paid instance with a persistent disk and set `DATABASE_URL=file:/var/data/tandem.db` (or equivalent).
 
 ---
 
