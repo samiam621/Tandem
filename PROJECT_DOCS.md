@@ -75,7 +75,7 @@ REST (every route needs `Authorization: Bearer`, and errors are `{ error: { code
 - [x] **Pinned docs control**: the branch owner gets a "Pinned docs (N)" button in the branch header. It opens the same checkbox list and saves with `pinnedDocIds`. Other members see the count read-only. Main has no owner, so it shows nothing.
 - [x] **ARCHITECTURE.md § Screens**: describe the Project docs card, the viewer, the branch-dialog checkboxes, and the pinned-docs control.
 - [x] `npm run typecheck` and `npm test` pass.
-- [ ] Against the `docs-server` server (`npm run dev`): upload a `.md` and a `.pdf` and they appear in the list. Create a branch with one ticked, and the branch shows "Pinned docs (1)".
+- [x] Against the `docs-server` server (`npm run dev`): upload a `.md` and a `.pdf` and they appear in the list. Create a branch with one ticked, and the branch shows "Pinned docs (1)". *(Run by Claude on 2026-10-05 in the real app, with a scratch profile and server.)*
 
 ## Checkpoints
 
@@ -83,7 +83,7 @@ REST (every route needs `Authorization: Bearer`, and errors are `{ error: { code
 - [x] **CP1a: server API (Claude).** The docs service, REST, PDF extraction, pins, WS events, and integration tests. *Gate:* `npm test` passes, and curl uploads, lists, and gets a `.md` and a `.pdf`.
 - [x] **CP2: AI context and MCP (Claude).** Retrieval, the context builder, the 3 MCP tools, and unit tests. *Gate:* an MCP `search_project_docs` call over curl returns the expected passage.
 - [x] **CP1b: desktop UI (Bob).** Everything in Bob's checklist. *Gate:* typecheck passes, and the manual check above works.
-- [ ] **CP3: integration (both).** Bob has rebased onto `docs-server`, and typecheck and tests pass on the merged branch. Claude runs the single-window flow and Sam runs the two-window live check. *Then* tick build step 16 in ARCHITECTURE.md.
+- [ ] **CP3: integration (both).** *Claude's part done on 2026-10-05: typecheck passes and 48 tests pass on `docs-server`, and the single-window flow passed in the real app (upload .md and .pdf, viewer, branch with one pin, an answer from the pinned doc plus an excerpt of the unpinned PDF, edit pins). Waiting on: fix B1 (Bob), then Sam's two-window check.* Bob has rebased onto `docs-server`, and typecheck and tests pass on the merged branch. Claude runs the single-window flow and Sam runs the two-window live check. *Then* tick build step 16 in ARCHITECTURE.md.
 
 ## Rules
 
@@ -94,4 +94,14 @@ REST (every route needs `Authorization: Bearer`, and errors are `{ error: { code
 
 ## Blockers
 
-_None yet._
+- **B1 (Bob): the Pinned docs modal loses edits when you toggle quickly.** It's in `SessionView.tsx`, in the pinned-docs panel.
+  - **What happens:** each `onChange` builds `next` from the `pb` captured at render, and the checkboxes use `defaultChecked`. Two toggles before the first PATCH returns, so the second PATCH overwrites the first. The checkboxes then disagree with the server.
+  - **Reproduced:** with both docs pinned, unticking both quickly showed both unticked while the server kept one pinned.
+  - **Fix:** use `checked={pb.pinnedDocIds.includes(doc.id)}` (a controlled input) and disable the checkboxes while a save is in flight. On an error, show the message instead of only reverting.
+
+## Review notes (not blocking)
+
+- **N1:** a new branch appears **twice** in its creator's branch list. `handleBranch` appends the REST result, and the `branch_created` handler appends again without a dedupe. This bug predates the docs work (it's on `main`), but it's a one-line fix in Bob's file: guard `branch_created` the way `doc_created` is guarded.
+- **N2:** after a WebSocket reconnect, nothing refetches: not docs, not the brief, not messages. `useWebSocket` has no reconnect callback, even though ARCHITECTURE.md § Real-time says the client refetches. This predates the docs work, so it should be a separate fix.
+- **N3:** the docs card shows kind and size but not the uploader name, which Bob's checklist asked for. It's minor; add it or drop it from the spec.
+- **N4:** the pinned-docs control lives in the sidebar branch list instead of the branch header. It works, and § Screens describes it correctly, so no change is needed.
