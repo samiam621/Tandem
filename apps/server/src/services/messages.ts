@@ -12,7 +12,7 @@ import type { Message } from '@tandem/shared'
 
 function now() { return new Date().toISOString() }
 
-function rowToMessage(row: typeof messages.$inferSelect): Message {
+export function rowToMessage(row: typeof messages.$inferSelect): Message {
   return {
     id: row.id,
     sessionId: row.sessionId,
@@ -22,6 +22,9 @@ function rowToMessage(row: typeof messages.$inferSelect): Message {
     authorId: row.authorId,
     agentLabel: row.agentLabel ?? null,
     sharedFromBranchId: row.sharedFromBranchId ?? null,
+    kind: row.kind,
+    askQuestion: row.askQuestion ?? null,
+    askedBranchId: row.askedBranchId ?? null,
     model: row.model ?? null,
     content: row.content,
     status: row.status,
@@ -181,11 +184,13 @@ export async function shareBranch(actor: { userId: string }, branchId: string): 
   const authorIds = [...new Set(own.map((m) => m.authorId))]
   const nameById = new Map(db.select().from(users).where(inArray(users.id, authorIds)).all().map((u) => [u.id, u.displayName]))
   const transcript = own
-    .map((m) => `${m.authorType === 'assistant' ? 'AI' : m.agentLabel ?? nameById.get(m.authorId) ?? 'someone'}: ${m.content}`)
+    .map((m) => m.kind === 'ask_parent'
+      ? `(asked the parent branch "${m.askQuestion}": ${m.content})`
+      : `${m.authorType === 'assistant' ? 'AI' : m.agentLabel ?? nameById.get(m.authorId) ?? 'someone'}: ${m.content}`)
     .join('\n')
     .slice(-SHARE_MAX_CHARS)
 
-  const summary = await summarize(branch.model, transcript)
+  const summary = await summarize(branch.sessionId, branch.model, transcript)
   const mainId = db.select().from(branches).where(and(eq(branches.sessionId, branch.sessionId), eq(branches.isMain, true))).get()!.id
 
   const msgId = nanoid()

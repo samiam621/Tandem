@@ -2,6 +2,7 @@ import { z } from 'zod';
 export type UserKind = 'github' | 'guest' | 'agent';
 export type AuthorType = 'user' | 'assistant' | 'agent';
 export type MessageStatus = 'pending' | 'streaming' | 'done' | 'error';
+export type MessageKind = 'text' | 'ask_parent';
 export type TokenKind = 'desktop' | 'agent';
 export interface User {
     id: string;
@@ -32,6 +33,10 @@ export interface Branch {
     headMessageId: string | null;
     createdAt: string;
     documentIds: string[] | null;
+    purpose: string | null;
+    branchContext: string | null;
+    branchContextUpdatedAt: string | null;
+    branchContextUpdatedBy: string | null;
 }
 export interface SessionDocument {
     id: string;
@@ -55,6 +60,16 @@ export interface Message {
     createdAt: string;
     agentLabel?: string | null;
     sharedFromBranchId?: string | null;
+    kind?: MessageKind;
+    askQuestion?: string | null;
+    askedBranchId?: string | null;
+}
+export interface SessionKeyInfo {
+    sessionId: string;
+    hasKey: boolean;
+    keyLast4: string | null;
+    setBy: string | null;
+    setAt: string | null;
 }
 export interface SessionAgent {
     tokenId: string;
@@ -107,21 +122,43 @@ export declare const JoinSessionSchema: z.ZodObject<{
 }>;
 export declare const DOCUMENT_MAX_CHARS = 60000;
 export declare const DOCUMENT_NAME_MAX = 128;
+export declare const BRANCH_PURPOSE_MAX = 500;
+export declare const BRANCH_CONTEXT_MAX_CHARS = 12000;
 export declare const CreateBranchSchema: z.ZodObject<{
     fromMessageId: z.ZodString;
     model: z.ZodString;
     name: z.ZodOptional<z.ZodString>;
     documentIds: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+    purpose: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
     fromMessageId: string;
     model: string;
     name?: string | undefined;
     documentIds?: string[] | undefined;
+    purpose?: string | undefined;
 }, {
     fromMessageId: string;
     model: string;
     name?: string | undefined;
     documentIds?: string[] | undefined;
+    purpose?: string | undefined;
+}>;
+export declare const UpdateBranchContextSchema: z.ZodObject<{
+    content: z.ZodString;
+    baseUpdatedAt: z.ZodNullable<z.ZodString>;
+}, "strip", z.ZodTypeAny, {
+    content: string;
+    baseUpdatedAt: string | null;
+}, {
+    content: string;
+    baseUpdatedAt: string | null;
+}>;
+export declare const SetSessionKeySchema: z.ZodObject<{
+    key: z.ZodString;
+}, "strip", z.ZodTypeAny, {
+    key: string;
+}, {
+    key: string;
 }>;
 export declare const UpdateBranchSchema: z.ZodObject<{
     name: z.ZodOptional<z.ZodString>;
@@ -145,6 +182,7 @@ export declare const PostMessageSchema: z.ZodObject<{
 }>;
 export declare const BRIEF_MAX_CHARS = 20000;
 export declare const BRIEF_AUTO_REFRESH_AUTHOR = "system";
+export declare const AI_AUTHOR = "system";
 export declare const UpdateBriefSchema: z.ZodObject<{
     content: z.ZodString;
     baseUpdatedAt: z.ZodNullable<z.ZodString>;
@@ -277,6 +315,10 @@ export interface WsDocumentUpdatedEvent {
     type: 'document_updated';
     payload: SessionDocument;
 }
+export interface WsSessionKeyUpdatedEvent {
+    type: 'session_key_updated';
+    payload: SessionKeyInfo;
+}
 export interface WsDocumentDeletedEvent {
     type: 'document_deleted';
     payload: {
@@ -284,7 +326,7 @@ export interface WsDocumentDeletedEvent {
         documentId: string;
     };
 }
-export type WsServerEvent = WsPresenceUpdateEvent | WsMessageCreatedEvent | WsAssistantDeltaEvent | WsAssistantDoneEvent | WsAssistantErrorEvent | WsBranchCreatedEvent | WsBranchUpdatedEvent | WsTypingEvent | WsBriefUpdatedEvent | WsDocumentUpdatedEvent | WsDocumentDeletedEvent;
+export type WsServerEvent = WsPresenceUpdateEvent | WsMessageCreatedEvent | WsAssistantDeltaEvent | WsAssistantDoneEvent | WsAssistantErrorEvent | WsBranchCreatedEvent | WsBranchUpdatedEvent | WsTypingEvent | WsBriefUpdatedEvent | WsDocumentUpdatedEvent | WsDocumentDeletedEvent | WsSessionKeyUpdatedEvent;
 export interface McpSessionSummary {
     id: string;
     title: string;
@@ -319,6 +361,8 @@ export interface McpMention {
 }
 export interface McpContextMessage extends McpMessageRow {
     branchId: string;
+    kind: MessageKind;
+    askQuestion: string | null;
     agentLabel: string | null;
     sharedFromBranchId: string | null;
 }
@@ -343,6 +387,8 @@ export interface McpBranchContext {
         branchName: string;
         messageId: string;
     } | null;
+    purpose: string | null;
+    branchContext: string | null;
     messages: McpContextMessage[];
     otherBranches: {
         id: string;

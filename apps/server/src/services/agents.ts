@@ -6,6 +6,7 @@ import type { SessionEvent } from '../events.js'
 import { getBranchMessages } from './messages.js'
 import { getSessionBranches } from './sessions.js'
 import { documentsForBranch } from './documents.js'
+import { branchHistory } from '../ai/context.js'
 import type { Actor } from './auth.js'
 import type { McpBranchContext, McpMention } from '@tandem/shared'
 
@@ -61,8 +62,8 @@ export function waitForMentions(actor: Actor, since: string, timeoutMs: number):
 // ─── Branch context ───────────────────────────────────────────────────────────
 
 // Everything an agent needs before working on a branch: the brief, the documents the branch reads,
-// the root-to-head path (including the history inherited from the fork), who owns it, and the
-// session's other branches.
+// its history as its AI sees it (main: the whole path; any other branch: its branch context, the
+// fork tail, and its own messages), who owns it, and the session's other branches.
 export async function getBranchContext(actor: Actor, branchId: string, limit: number): Promise<McpBranchContext | null> {
   const path = await getBranchMessages(actor, branchId) // also checks membership
   if (!path) return null
@@ -85,6 +86,13 @@ export async function getBranchContext(actor: Actor, branchId: string, limit: nu
   const branchName = new Map(sessionBranches.map((b) => [b.id, b.name]))
   const fork = branch.forkMessageId ? path.find((m) => m.id === branch.forkMessageId) : undefined
   const docs = documentsForBranch(branch)
+  // The same scoping as the branch's own AI: the fork tail and the branch's messages, not the parent's whole history.
+  const rows = db.select().from(messages).where(eq(messages.sessionId, sessionId)).all()
+  const { tail, own } = branch.headMessageId
+    ? branchHistory(rows, branch.headMessageId, branch.isMain ? null : branch.forkMessageId)
+    : { tail: [], own: [] }
+  const historyIds = new Set([...tail, ...own].map((m) => m.id))
+  const history = path.filter((m) => historyIds.has(m.id))
 
   return {
     session,
@@ -94,9 +102,13 @@ export async function getBranchContext(actor: Actor, branchId: string, limit: nu
     otherDocuments: docs.others.map(({ id, name, updatedAt }) => ({ id, name, updatedAt })),
     branch: { ...branch, ownerDisplayName: ownerName(branch.ownerId) },
     forkedFrom: fork ? { branchId: fork.branchId, branchName: branchName.get(fork.branchId) ?? '', messageId: fork.id } : null,
-    messages: path.slice(-limit).map((m) => ({
+    purpose: branch.purpose,
+    branchContext: branch.branchContext,
+    messages: history.slice(-limit).map((m) => ({
       id: m.id,
       branchId: m.branchId,
+      kind: m.kind ?? 'text',
+      askQuestion: m.askQuestion ?? null,
       authorType: m.authorType,
       authorDisplayName: m.authorType === 'assistant' ? 'Tandem AI' : m.agentLabel ?? nameById.get(m.authorId) ?? m.authorId,
       agentLabel: m.agentLabel ?? null,

@@ -16,6 +16,8 @@ import { listMentions, waitForMentions, getBranchContext, setWorking } from '../
 import { bus } from '../events.js'
 import { BRIEF_REFRESH_EVERY } from '../services/brief.js'
 import * as openrouter from '../ai/openrouter.js'
+import * as keys from '../ai/keys.js'
+import { askParent } from '../services/askParent.js'
 import { BRIEF_AUTO_REFRESH_AUTHOR, SaveDocumentSchema } from '@tandem/shared'
 import Database from 'better-sqlite3'
 import { drizzle } from 'drizzle-orm/better-sqlite3'
@@ -33,10 +35,11 @@ function buildTestDb() {
     CREATE TABLE users (id TEXT PRIMARY KEY, kind TEXT NOT NULL, display_name TEXT NOT NULL, github_id TEXT, device_id TEXT, avatar_url TEXT, created_at TEXT NOT NULL);
     CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, owner_id TEXT NOT NULL, default_model TEXT NOT NULL, invite_code TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, brief TEXT NOT NULL DEFAULT '', brief_updated_at TEXT, brief_updated_by TEXT);
     CREATE TABLE session_members (session_id TEXT NOT NULL, user_id TEXT NOT NULL, joined_at TEXT NOT NULL, last_seen_at TEXT NOT NULL);
-    CREATE TABLE branches (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, owner_id TEXT, is_main INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL, model TEXT NOT NULL, fork_message_id TEXT, head_message_id TEXT, created_at TEXT NOT NULL, document_ids TEXT);
+    CREATE TABLE branches (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, owner_id TEXT, is_main INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL, model TEXT NOT NULL, fork_message_id TEXT, head_message_id TEXT, created_at TEXT NOT NULL, document_ids TEXT, purpose TEXT, branch_context TEXT, branch_context_updated_at TEXT, branch_context_updated_by TEXT);
+    CREATE TABLE session_keys (session_id TEXT PRIMARY KEY, key_ciphertext TEXT NOT NULL, key_last4 TEXT NOT NULL, set_by TEXT NOT NULL, set_at TEXT NOT NULL);
     CREATE TABLE session_documents (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, name TEXT NOT NULL, content TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL);
     CREATE UNIQUE INDEX session_documents_session_name ON session_documents (session_id, name);
-    CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, branch_id TEXT NOT NULL, parent_id TEXT, author_type TEXT NOT NULL, author_id TEXT NOT NULL, agent_label TEXT, shared_from_branch_id TEXT, model TEXT, content TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL);
+    CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, branch_id TEXT NOT NULL, parent_id TEXT, author_type TEXT NOT NULL, author_id TEXT NOT NULL, agent_label TEXT, shared_from_branch_id TEXT, kind TEXT NOT NULL DEFAULT 'text', ask_question TEXT, asked_branch_id TEXT, model TEXT, content TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL);
     CREATE TABLE message_mentions (message_id TEXT NOT NULL, token_id TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE api_tokens (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, kind TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, label TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT);
   `)
@@ -566,6 +569,92 @@ describe('REST integration', () => {
       payload: { content: 'note to self @Claude', triggerAi: false },
     })
     expect(listMentions(claude, '').length).toBe(before)
+  })
+
+  it('session key: only the owner sets or removes it, and only its last four characters leave the server', async () => {
+    const url = `/api/sessions/${sessionId}/key`
+    const call = (method: 'GET' | 'PUT' | 'DELETE', tok: string, payload?: object) =>
+      app.inject({ method, url, headers: { authorization: `Bearer ${tok}` }, payload })
+    const rawKey = 'sk-or-v1-secretsecretsecret9xyz'
+    const verify = vi.spyOn(keys, 'verifyOpenRouterKey').mockResolvedValue(true)
+    const seen: any[] = []
+    const onEvent = ({ event }: any) => event.type === 'session_key_updated' && seen.push(event.payload)
+    bus.onSession(onEvent)
+    try {
+      expect((await call('GET', user2Token)).json()).toMatchObject({ hasKey: false, keyLast4: null })
+      expect((await call('PUT', token, { key: 'not-a-key' })).statusCode).toBe(400)
+      expect((await call('PUT', user2Token, { key: rawKey })).statusCode).toBe(403)
+
+      const set = await call('PUT', token, { key: rawKey })
+      expect(set.statusCode).toBe(200)
+      expect(set.json()).toMatchObject({ hasKey: true, keyLast4: '9xyz', setBy: userId })
+      expect(set.body).not.toContain(rawKey)
+      expect((await call('GET', user2Token)).json()).toMatchObject({ hasKey: true, keyLast4: '9xyz' })
+      expect(JSON.stringify(seen)).not.toContain(rawKey)
+      const stored = testDb.select().from(schema.sessionKeys).all()
+      expect(JSON.stringify(stored)).not.toContain(rawKey)
+      expect(keys.apiKeyFor(sessionId)).toEqual({ apiKey: rawKey, byok: true })
+
+      verify.mockResolvedValue(false)
+      expect((await call('PUT', token, { key: 'sk-or-v1-wrong' })).json().error.code).toBe('invalid_key')
+
+      expect((await call('DELETE', user2Token)).statusCode).toBe(403)
+      expect((await call('DELETE', token)).json()).toMatchObject({ hasKey: false })
+      expect(keys.apiKeyFor(sessionId).byok).toBe(false)
+      expect(seen.map((e) => e.hasKey)).toEqual([true, false])
+    } finally {
+      bus.offSession(onEvent)
+      verify.mockRestore()
+      keys.deleteSessionKey(sessionId) // later tests must not run on a key
+    }
+  })
+
+  it('a branch forked late does not inherit main\'s earlier history, and keeps its purpose', async () => {
+    const auth = { authorization: `Bearer ${token}` }
+    for (let i = 1; i <= 8; i++) {
+      await app.inject({ method: 'POST', url: `/api/branches/${mainBranchId}/messages`, headers: auth, payload: { content: `plan ${i}`, triggerAi: false } })
+    }
+    const mainMsgs = (await app.inject({ method: 'GET', url: `/api/branches/${mainBranchId}/messages`, headers: auth })).json()
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${sessionId}/branches`, headers: auth,
+      payload: { fromMessageId: mainMsgs.at(-1).id, model: 'test-model', name: 'frontend', purpose: 'Frontend: settings page' },
+    })
+    expect(res.statusCode).toBe(201)
+    expect(res.json()).toMatchObject({ purpose: 'Frontend: settings page', branchContext: null })
+
+    const ctx = (await getBranchContext((await resolveToken(claudeToken))!, res.json().id, 200))!
+    expect(ctx.purpose).toBe('Frontend: settings page')
+    expect(ctx.messages.map((m) => m.content)).toEqual(['plan 3', 'plan 4', 'plan 5', 'plan 6', 'plan 7', 'plan 8'])
+    expect(ctx.messages.map((m) => m.content)).not.toContain('Hello integration test!')
+  })
+
+  it('PUT /api/branches/:id/context: owner only, stale saves conflict, main has none', async () => {
+    const put = (branchId: string, tok: string, payload: object) =>
+      app.inject({ method: 'PUT', url: `/api/branches/${branchId}/context`, headers: { authorization: `Bearer ${tok}` }, payload })
+    expect((await put(bugfixBranchId, user2Token, { content: 'x', baseUpdatedAt: null })).statusCode).toBe(403)
+    expect((await put(mainBranchId, token, { content: 'x', baseUpdatedAt: null })).statusCode).toBe(400)
+
+    const first = await put(bugfixBranchId, token, { content: '- Fix the login bug [Alice in main, Oct 2]', baseUpdatedAt: null })
+    expect(first.statusCode).toBe(200)
+    expect(first.json()).toMatchObject({ branchContext: '- Fix the login bug [Alice in main, Oct 2]', branchContextUpdatedBy: userId })
+    expect((await put(bugfixBranchId, token, { content: 'stale', baseUpdatedAt: null })).statusCode).toBe(409)
+    expect((await put(bugfixBranchId, token, { content: 'next', baseUpdatedAt: first.json().branchContextUpdatedAt })).statusCode).toBe(200)
+
+    const regen = await app.inject({ method: 'POST', url: `/api/branches/${bugfixBranchId}/context/regenerate`, headers: { authorization: `Bearer ${token}` } })
+    expect(regen.json().error.code).toBe('no_model') // no OpenRouter key in tests
+  })
+
+  it('askParent records the question and answer in the asking branch (owner only, never main)', async () => {
+    const claude = (await resolveToken(claudeToken))!
+    const result = await askParent(claude, bugfixBranchId, 'Which database did we pick?')
+    expect(result.answeredBy).toEqual({ branchId: mainBranchId, branchName: 'main' })
+    expect(result.answer).toContain('Dev mode') // no OpenRouter key in tests
+    expect(result.message).toMatchObject({ branchId: bugfixBranchId, kind: 'ask_parent', askQuestion: 'Which database did we pick?', askedBranchId: mainBranchId })
+
+    const msgs = (await app.inject({ method: 'GET', url: `/api/branches/${bugfixBranchId}/messages`, headers: { authorization: `Bearer ${token}` } })).json()
+    expect(msgs.at(-1).id).toBe(result.message.id) // the new head of the branch
+    await expect(askParent(claude, mainBranchId, 'q')).rejects.toMatchObject({ status: 400 })
+    await expect(askParent((await resolveToken(user2Token))!, bugfixBranchId, 'q')).rejects.toMatchObject({ status: 403 })
   })
 
   it('POST /api/auth/exchange with invalid code → 401', async () => {

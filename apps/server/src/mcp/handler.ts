@@ -12,6 +12,7 @@ import { getBranchMessages, postMessage, shareBranch } from '../services/message
 import { createBranch } from '../services/branches.js'
 import { listModels } from '../ai/models.js'
 import { waitForMentions, getBranchContext, setWorking } from '../services/agents.js'
+import { askParent } from '../services/askParent.js'
 import { eq } from 'drizzle-orm'
 import { getDb } from '../db/index.js'
 import { messages, users } from '../db/schema.js'
@@ -122,7 +123,7 @@ function buildMcpServer(actor: Actor) {
   // ─── get_branch_context ───────────────────────────────────────────────────
   server.tool(
     'get_branch_context',
-    "Get everything you need before working on a branch: the brief (a summary of the main thread: direction, decisions, who is on what), the project documents this branch reads (specs such as ARCHITECTURE.md or TODO.md, in full) plus the names of the others, the branch's whole conversation from the session's start through the fork point (oldest first), who owns it and which branch it split from, and the session's other branches. Call this after being mentioned and before replying, so you are on the same page as the team.",
+    "Get everything you need before working on a branch: the brief (a summary of the main thread: direction, decisions, who is on what), the project documents this branch reads (specs such as ARCHITECTURE.md or TODO.md, in full) plus the names of the others, the branch's purpose and branch context (a cited summary of what it needs from the conversation it split off from), the last few messages before the fork and the branch's own messages (oldest first; main returns its whole conversation), who owns it and which branch it split from, and the session's other branches. Call this after being mentioned and before replying, so you are on the same page as the team. If something you need is missing, use ask_parent.",
     {
       branchId: z.string().describe('The branch ID'),
       limit: z.number().int().min(1).max(500).default(200).describe('Max messages to return (newest kept)'),
@@ -130,6 +131,22 @@ function buildMcpServer(actor: Actor) {
     async ({ branchId, limit }) => {
       const context = await getBranchContext(actor, branchId, limit)
       return json(context ?? { error: 'not_found' })
+    },
+  )
+
+  // ─── ask_parent ───────────────────────────────────────────────────────────
+  server.tool(
+    'ask_parent',
+    "Ask the branch this branch split off from about something its context leaves out: a decision, a constraint, what someone said. The parent branch's AI answers from its full live history with sources in [brackets], and asks its own parent if it does not know, up to main. The question and answer are recorded in the branch so teammates see them. Use it instead of guessing about project decisions. Only works on branches owned by your token's user, and not on main.",
+    {
+      branchId: z.string().describe('The branch that is asking'),
+      question: z.string().min(1).max(2000).describe('One specific question'),
+    },
+    async ({ branchId, question }) => {
+      return jsonOrError(async () => {
+        const { answer, answeredBy } = await askParent(actor, branchId, question)
+        return { answer, answeredBy }
+      })
     },
   )
 
@@ -220,18 +237,19 @@ function buildMcpServer(actor: Actor) {
   // ─── create_branch ────────────────────────────────────────────────────────
   server.tool(
     'create_branch',
-    "Create a new branch from a specific message. The branch's AI reads the documents in documentIds; omit it to copy the parent branch's selection (every document when branching from main).",
+    "Create a new branch from a specific message. The branch does not inherit the parent's whole conversation: AI writes it a cited branch context for its purpose, plus it keeps the last few messages before the fork. The branch's AI reads the documents in documentIds; omit it to copy the parent branch's selection (every document when branching from main).",
     {
       fromMessageId: z.string().describe('The message ID to branch from'),
       model: z.string().describe('AI model ID for this branch'),
       name: z.string().optional().describe('Optional branch name'),
+      purpose: z.string().max(500).optional().describe('What the branch is for, e.g. "Frontend: settings page". Its context is written for this.'),
       documentIds: z.array(z.string()).optional().describe('IDs of the project documents this branch reads (see list_documents)'),
     },
-    async ({ fromMessageId, model, name, documentIds }) => {
+    async ({ fromMessageId, model, name, purpose, documentIds }) => {
       const db = getDb()
       const msg = db.select().from(messages).where(eq(messages.id, fromMessageId)).get()
       if (!msg) return json({ error: 'message_not_found' })
-      const branch = await createBranch(actor, msg.sessionId, fromMessageId, model, name, documentIds)
+      const branch = await createBranch(actor, msg.sessionId, fromMessageId, model, name, documentIds, purpose?.trim() || undefined)
       if (!branch) return json({ error: 'not_found' })
       return json(branch)
     },

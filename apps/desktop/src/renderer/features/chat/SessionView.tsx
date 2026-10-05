@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react'
-import type { Session, Branch, Message, User, SessionAgent, SessionDocument } from '@tandem/shared'
+import type { Session, Branch, Message, User, SessionAgent, SessionDocument, SessionKeyInfo } from '@tandem/shared'
 import { api } from '../../lib/api'
 import { useAuth } from '../../app/AuthContext'
 import { useWebSocket } from '../../lib/useWebSocket'
@@ -7,6 +7,8 @@ import { MessageTreePanel } from './MessageTreePanel'
 import { MentionMenu, buildMentionItems, highlightMentions } from './MentionMenu'
 import { BriefPanel, type BriefState } from './BriefPanel'
 import { DocumentPanel } from './DocumentPanel'
+import { BranchContextPanel } from './BranchContextPanel'
+import { SessionKeyPanel } from './SessionKeyPanel'
 import { Icon, TandemMark } from '../../components/Icon'
 
 // openDocId while the document panel is open on a new, unsaved document.
@@ -37,6 +39,11 @@ export function SessionView({ session, onBack }: Props) {
   const [branchError, setBranchError] = useState<string | null>(null)
   const [branchModel, setBranchModel] = useState('')
   const [branchName, setBranchName] = useState('')
+  const [branchPurpose, setBranchPurpose] = useState('')
+  const [branchContextOpen, setBranchContextOpen] = useState(false)
+  // ── The session's own OpenRouter key (BYOK) ──────────────────────────────────
+  const [keyInfo, setKeyInfo] = useState<SessionKeyInfo | null>(null)
+  const [keyOpen, setKeyOpen] = useState(false)
   // ── Share-to-main state ──────────────────────────────────────────────────────
   const [sharingBranchId, setSharingBranchId] = useState<string | null>(null)
   const [shareConfirm, setShareConfirm] = useState(false)
@@ -73,11 +80,20 @@ export function SessionView({ session, onBack }: Props) {
   useEffect(() => {
     window.tandem.getToken().then(setToken)
     window.tandem.getServerUrl().then(setServerUrl)
-    api.models.list().then((ms) => {
-      setModels(ms)
-      if (ms.length) setBranchModel(ms[0].id)
-    }).catch(() => {})
   }, [])
+
+  // The models this session can use: every model once it has its own key, free ones otherwise.
+  const fetchModels = useCallback(() => {
+    api.models.list(session.id).then((ms) => {
+      setModels(ms)
+      setBranchModel((cur) => (ms.some((m) => m.id === cur) ? cur : ms[0]?.id ?? ''))
+    }).catch(() => {})
+  }, [session.id])
+
+  useEffect(() => {
+    fetchModels()
+    api.sessions.key(session.id).then(setKeyInfo).catch(() => {})
+  }, [session.id, fetchModels])
 
   const activeBranch = branches.find((b) => b.id === activeBranchId) ?? null
 
@@ -106,6 +122,11 @@ export function SessionView({ session, onBack }: Props) {
           if (incoming.branchId === activeBranchId) {
             setMessages((prev) => {
               if (prev.find((m) => m.id === incoming.id)) return prev
+              // The AI's own ask_parent is recorded just before its in-progress reply.
+              const last = prev[prev.length - 1]
+              if (incoming.kind === 'ask_parent' && last && last.authorType === 'assistant' && (last.status === 'pending' || last.status === 'streaming')) {
+                return [...prev.slice(0, -1), incoming, last]
+              }
               return [...prev, incoming]
             })
             setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }), 50)
@@ -170,6 +191,12 @@ export function SessionView({ session, onBack }: Props) {
           setDocuments((prev) => upsertDocument(prev, doc))
         }
         break
+      case 'session_key_updated':
+        if (event.payload.sessionId === session.id) {
+          setKeyInfo(event.payload)
+          fetchModels()
+        }
+        break
       case 'document_deleted':
         if (event.payload.sessionId === session.id) {
           const { documentId } = event.payload
@@ -205,7 +232,7 @@ export function SessionView({ session, onBack }: Props) {
         }
         break
     }
-  }, [session.id, activeBranchId, user?.id, members])
+  }, [session.id, activeBranchId, user?.id, members, fetchModels])
 
   const { send: wsSend } = useWebSocket(serverUrl, token, session.id, handleWsEvent)
 
@@ -385,11 +412,12 @@ export function SessionView({ session, onBack }: Props) {
     if (!branchingFromMsg) return
     setBranchError(null)
     try {
-      const branch = await api.branches.create(session.id, branchingFromMsg.id, branchModel, branchName || undefined, branchDocIds)
+      const branch = await api.branches.create(session.id, branchingFromMsg.id, branchModel, branchName || undefined, branchDocIds, branchPurpose.trim() || undefined)
       setBranches((prev) => (prev.some((b) => b.id === branch.id) ? prev : [...prev, branch]))
       setActiveBranchId(branch.id)
       setBranchingFromMsg(null)
       setBranchName('')
+      setBranchPurpose('')
     } catch (err: any) {
       setBranchError(err?.message ?? 'Failed to create branch')
     }
@@ -526,6 +554,31 @@ export function SessionView({ session, onBack }: Props) {
             <div className="flex items-center gap-2 text-ui font-medium text-primary"><Icon name="document" />Brief</div>
             <div className="text-xs text-muted truncate">
               {brief.brief ? brief.brief.split('\n').find((l) => l.trim()) : 'Summary of main every branch reads'}
+            </div>
+          </button>
+
+          {/* Branch context — what this branch's AI knows of the conversation it split off from */}
+          {activeBranch && !activeBranch.isMain && (
+            <button
+              onClick={() => setBranchContextOpen(true)}
+              className="mx-2 rounded-lg px-2.5 py-2 text-left hover:bg-hover"
+            >
+              <div className="flex items-center gap-2 text-ui font-medium text-primary"><Icon name="branch" />Branch context</div>
+              <div className="text-xs text-muted truncate">
+                {activeBranch.branchContext?.split('\n').find((l) => l.trim())
+                  ?? (activeBranch.branchContextUpdatedAt ? 'Empty' : 'Not written yet')}
+              </div>
+            </button>
+          )}
+
+          {/* OpenRouter key — the session's own key every member's AI runs on */}
+          <button
+            onClick={() => setKeyOpen(true)}
+            className="mx-2 mb-2 rounded-lg px-2.5 py-2 text-left hover:bg-hover"
+          >
+            <div className="flex items-center gap-2 text-ui font-medium text-primary"><Icon name="link" />OpenRouter key</div>
+            <div className="text-xs text-muted truncate">
+              {keyInfo?.hasKey ? `Session key …${keyInfo.keyLast4}` : session.ownerId === user?.id ? 'Add your key to use any model' : 'Free models'}
             </div>
           </button>
 
@@ -671,6 +724,18 @@ export function SessionView({ session, onBack }: Props) {
                   <button type="button" onClick={() => setBranchError(null)} className="ml-2 text-danger hover:text-primary">✕</button>
                 </p>
               )}
+              <input
+                type="text"
+                placeholder="What is this branch for? e.g. Frontend: settings page"
+                value={branchPurpose}
+                onChange={(e) => setBranchPurpose(e.target.value)}
+                maxLength={500}
+                aria-label="Branch purpose"
+                className="w-full rounded-lg bg-raised px-3 py-1.5 text-xs outline-none ring-1 ring-control focus:ring-accent"
+              />
+              <p className="text-xs text-muted leading-snug">
+                The branch’s AI gets a summary of this conversation written for that purpose, with sources, plus the last few messages. It can ask this branch for anything else.
+              </p>
               <div className="flex flex-wrap gap-2">
                 <input
                   type="text"
@@ -807,6 +872,27 @@ export function SessionView({ session, onBack }: Props) {
         />
       )}
 
+      {branchContextOpen && activeBranch && !activeBranch.isMain && (
+        <BranchContextPanel
+          key={activeBranch.id}
+          branch={activeBranch}
+          members={members}
+          canEdit={activeBranch.ownerId === user?.id}
+          onChange={(next) => setBranches((prev) => prev.map((b) => (b.id === next.id ? next : b)))}
+          onClose={() => setBranchContextOpen(false)}
+        />
+      )}
+
+      {keyOpen && keyInfo && (
+        <SessionKeyPanel
+          info={keyInfo}
+          isOwner={session.ownerId === user?.id}
+          members={members}
+          onChange={(next) => { setKeyInfo(next); fetchModels() }}
+          onClose={() => setKeyOpen(false)}
+        />
+      )}
+
       {openDocId && (
         <DocumentPanel
           key={openDocId}
@@ -853,6 +939,20 @@ function MessageRow({
     ? msg.model?.split('/').pop() ?? 'AI'
     : isAgent ? msg.agentLabel?.trim() || author?.displayName || 'Agent'
     : author?.displayName ?? 'Unknown'
+
+  if (msg.kind === 'ask_parent') {
+    const answeredBy = branches.find((b) => b.id === msg.askedBranchId)
+    return (
+      <article className="rounded-xl border border-line p-4 space-y-2">
+        <div className="flex items-center gap-2 text-xs text-secondary">
+          <Icon name="branch" />
+          <span className="min-w-0 break-words">Asked {answeredBy?.name ?? 'the parent branch'}</span>
+        </div>
+        <p className="text-ui text-secondary whitespace-pre-wrap [overflow-wrap:anywhere]">{msg.askQuestion}</p>
+        <p className="message-prose whitespace-pre-wrap [overflow-wrap:anywhere]">{msg.content}</p>
+      </article>
+    )
+  }
 
   if (msg.sharedFromBranchId) {
     const sourceBranch = branches.find((b) => b.id === msg.sharedFromBranchId)

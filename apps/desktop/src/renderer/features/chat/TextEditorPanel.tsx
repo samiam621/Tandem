@@ -18,6 +18,8 @@ interface Props {
   emptyText: string
   /** Start in edit mode (e.g. a new document) */
   startEditing?: boolean
+  /** Hide Edit, for viewers who cannot save (e.g. another member's branch context) */
+  readOnly?: boolean
   /** Extra buttons shown while not editing (e.g. Refresh, Delete) */
   actions?: React.ReactNode
   /** Saves the draft made from `base`. On a 409, the parent refetches so `current` moves on. */
@@ -30,7 +32,7 @@ interface Props {
 // A modal for reading and editing shared text that any member can change. A save made from an
 // outdated version is refused by the server (409) and the draft is kept.
 export function TextEditorPanel({
-  title, hint, current, maxChars, placeholder, emptyText, startEditing, actions, onSave, onConflict, onClose, error: outerError,
+  title, hint, current, maxChars, placeholder, emptyText, startEditing, readOnly, actions, onSave, onConflict, onClose, error: outerError,
 }: Props) {
   const [draft, setDraft] = useState<string | null>(startEditing ? current.content : null) // null = not editing
   const [base, setBase] = useState<string | null>(current.version) // version the draft started from
@@ -170,9 +172,11 @@ export function TextEditorPanel({
           ) : (
             <span className="flex gap-2">
               {actions}
-              <button onClick={loadLatest} className="text-xs rounded-lg bg-selected px-3 py-1.5 hover:bg-hover">
-                Edit
-              </button>
+              {!readOnly && (
+                <button onClick={loadLatest} className="text-xs rounded-lg bg-selected px-3 py-1.5 hover:bg-hover">
+                  Edit
+                </button>
+              )}
             </span>
           )}
         </div>

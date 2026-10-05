@@ -95,11 +95,12 @@ The server creates and migrates its SQLite database on startup (`npm run db:migr
 | Variable | Purpose |
 |---|---|
 | `DATABASE_URL` | SQLite file, e.g. `file:./tandem.db` |
-| `OPENROUTER_API_KEY` | OpenRouter key. Stays on the server and is never sent to clients. |
-| `OPENROUTER_ALLOW_PAID` | `true` to allow paid models. Otherwise only `:free` models are listed and called. Default `false`. |
+| `OPENROUTER_API_KEY` | The server's OpenRouter key, used by sessions without their own key. Stays on the server and is never sent to clients. |
+| `OPENROUTER_ALLOW_PAID` | `true` to allow paid models on the server's key. Otherwise only `:free` models are listed and called there. Sessions with their own key can always use paid models. Default `false`. |
 | `GITHUB_CLIENT_ID` | GitHub OAuth app client ID (optional) |
 | `GITHUB_CLIENT_SECRET` | GitHub OAuth app client secret (optional) |
 | `TOKEN_SECRET` | Secret used to hash access tokens. Required when `PUBLIC_URL` is not localhost. |
+| `KEY_ENCRYPTION_SECRET` | Secret used to encrypt each session's own OpenRouter key at rest. Required when `PUBLIC_URL` is not localhost; changing it makes stored session keys unreadable, so owners must add them again. |
 | `PUBLIC_URL` | Public base URL of the server (OAuth callbacks and invite links) |
 | `PORT` | HTTP port (default `3000`) |
 
@@ -150,7 +151,7 @@ Deploy `apps/server` to Render, Railway, or Fly.io. The host needs to support We
 |---|---|
 | Build command | `npm ci && npm run build -w packages/shared` |
 | Start command | `cd apps/server && npx tsx src/index.ts` |
-| Env | `TOKEN_SECRET` (random 32-byte hex), `PUBLIC_URL`, `DATABASE_URL=file:./tandem.db`, `NODE_VERSION=22`, `ELECTRON_SKIP_BINARY_DOWNLOAD=1`, and `OPENROUTER_API_KEY` for real AI replies |
+| Env | `TOKEN_SECRET` and `KEY_ENCRYPTION_SECRET` (each a random 32-byte hex), `PUBLIC_URL`, `DATABASE_URL=file:./tandem.db`, `NODE_VERSION=22`, `ELECTRON_SKIP_BINARY_DOWNLOAD=1`, and `OPENROUTER_API_KEY` for real AI replies |
 
 On Render's free plan the service sleeps after 15 minutes without traffic, and every restart or deploy **wipes the SQLite database**: users must sign in again and agent tokens must be recreated. For data that survives, use a paid instance with a persistent disk and point `DATABASE_URL` at it (for example `file:/var/data/tandem.db`).
 
@@ -168,23 +169,28 @@ Base path `/api`. Authenticate with `Authorization: Bearer <token>`. Bodies are 
 | POST | `/api/auth/exchange` | Trade `{ code }` for a token. Each code works once and expires after 60 s. |
 | POST | `/api/auth/logout` | Revoke the current token |
 | GET | `/api/me` | Current user |
-| GET | `/api/models` | Available models (cached for 1 h) |
+| GET | `/api/models` | Available models (cached for 1 h). With `?sessionId=`, the models that session can use: every model when it has its own key. |
 | POST | `/api/sessions` | Create a session from `{ title, defaultModel }`. Returns the session, main branch, and invite. |
 | GET | `/api/sessions` | Sessions you belong to |
 | GET | `/api/sessions/:id` | Session details, members with online status, online count |
 | POST | `/api/sessions/join` | Join with `{ inviteCode }` |
 | PUT | `/api/sessions/:id/brief` | Any member replaces the project brief with `{ content, baseUpdatedAt }` (max 20,000 chars). `baseUpdatedAt` is the `briefUpdatedAt` the edit started from (`null` if never set); a mismatch returns `409 conflict`. Returns the session. |
 | POST | `/api/sessions/:id/brief/refresh` | Any member: AI rewrites the brief from the current brief and main's latest messages. Returns the session. `409` while a refresh is running, `502 upstream_error` if the model fails. |
+| GET | `/api/sessions/:id/key` | Any member: the session's OpenRouter key status `{ sessionId, hasKey, keyLast4, setBy, setAt }`. Never the key. |
+| PUT | `/api/sessions/:id/key` | Session owner only: set or replace the session's own OpenRouter key with `{ key }` (starts with `sk-or-`). Checked with OpenRouter first: `400 invalid_key` if rejected, `502` if OpenRouter cannot be reached. Every member's model calls in the session then use it. |
+| DELETE | `/api/sessions/:id/key` | Session owner only: remove the key; the session falls back to the server's key. |
 | GET | `/api/sessions/:id/documents` | The session's documents (specs and docs), with content, by name |
 | PUT | `/api/sessions/:id/documents` | Any member creates or replaces a document with `{ name, content, baseUpdatedAt }` (max 60,000 chars). `baseUpdatedAt: null` creates it; to edit, pass its `updatedAt`. A taken name or a mismatch returns `409 conflict`. |
 | GET | `/api/documents/:id` | One document |
 | DELETE | `/api/documents/:id` | Any member deletes a document |
 | GET | `/api/sessions/:id/agents` | Agent tokens owned by session members: `tokenId`, `label` (the @mention name), `ownerId`, `ownerName`, `active` (used in the last 5 min) |
 | GET | `/api/sessions/:id/branches` | All branches, with owner, model, fork point, and message count |
-| POST | `/api/sessions/:id/branches` | Create a branch from `{ fromMessageId, model, name?, documentIds? }`. `documentIds` are the documents its AI reads; omitted, it copies the parent branch's selection (every document when forking from main). |
+| POST | `/api/sessions/:id/branches` | Create a branch from `{ fromMessageId, model, name?, purpose?, documentIds? }`. `documentIds` are the documents its AI reads; omitted, it copies the parent branch's selection (every document when forking from main). The branch does not inherit its parent's whole history: AI writes it a cited branch context for `purpose` (max 500 chars; the name stands in when omitted), and a `branch_updated` event follows. |
+| PUT | `/api/branches/:id/context` | Owner only: replace the branch context with `{ content, baseUpdatedAt }` (max 12,000 chars). `baseUpdatedAt` is the `branchContextUpdatedAt` the edit started from (`null` if never written); a mismatch returns `409 conflict`. `400` on main. |
+| POST | `/api/branches/:id/context/regenerate` | Owner only: AI writes the branch context again from the parent's history. `400 no_model` without an OpenRouter key, `409` while one is being written, `502` if the model fails. |
 | PATCH | `/api/branches/:id` | Owner only: update `{ name?, model? }` |
 | PUT | `/api/branches/:id/documents` | Owner only: set `{ documentIds }`, the documents this branch's AI reads. `400` on main, which always reads every document. |
-| GET | `/api/branches/:id/messages` | Full message path for the branch, root to head |
+| GET | `/api/branches/:id/messages` | Full message path for the branch, root to head (what people see; a branch's AI sees less, see ARCHITECTURE.md § Scoped branch context). `kind: 'ask_parent'` marks a question to the parent branch (`askQuestion`) and its answer (`content`). |
 | POST | `/api/branches/:id/messages` | Send `{ content, triggerAi? = true }`. Returns the user message and the pending assistant message ID. The reply streams over WebSocket. A message that @mentions a session agent's label is saved as a mention and gets no built-in AI reply. |
 | POST | `/api/branches/:id/share` | Branch owner only. Posts an AI summary of the branch's own messages into main (`sharedFromBranchId` = the branch) and returns that message. `400` for main or an empty branch. |
 | GET | `/api/sessions/:id/tree` | All messages in the session with parent IDs |
@@ -236,7 +242,7 @@ claude mcp add --transport http tandem <SERVER_URL>/mcp \
 
 Some clients name the transport `"http"` instead of `"streamable-http"`.
 
-**Tools:** `list_sessions`, `get_session`, `read_branch`, `post_message`, `create_branch`, `list_models`, `wait_for_mentions`, `get_branch_context`, `set_working`, `share_to_main`, `update_brief`, `refresh_brief`, `list_documents`, `read_document`, `write_document`. An agent loops on `wait_for_mentions`, reads the branch with `get_branch_context`, calls `set_working`, and replies with `post_message`. Messages an agent posts appear live in the app with an agent label.
+**Tools:** `list_sessions`, `get_session`, `read_branch`, `post_message`, `create_branch`, `list_models`, `wait_for_mentions`, `get_branch_context`, `ask_parent`, `set_working`, `share_to_main`, `update_brief`, `refresh_brief`, `list_documents`, `read_document`, `write_document`. An agent loops on `wait_for_mentions`, reads the branch with `get_branch_context` (asking the parent branch with `ask_parent` for anything its context leaves out), calls `set_working`, and replies with `post_message`. Messages an agent posts appear live in the app with an agent label.
 
 **Claude Code as a teammate.** After `claude mcp add`, start `claude` and paste:
 

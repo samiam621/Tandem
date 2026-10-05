@@ -92,6 +92,15 @@ export const api = {
       }),
     refreshBrief: (id: string) =>
       request<import('@tandem/shared').Session>(`/api/sessions/${id}/brief/refresh`, { method: 'POST' }),
+    key: (id: string) =>
+      request<import('@tandem/shared').SessionKeyInfo>(`/api/sessions/${id}/key`),
+    setKey: (id: string, key: string) =>
+      request<import('@tandem/shared').SessionKeyInfo>(`/api/sessions/${id}/key`, {
+        method: 'PUT',
+        body: JSON.stringify({ key }),
+      }),
+    removeKey: (id: string) =>
+      request<import('@tandem/shared').SessionKeyInfo>(`/api/sessions/${id}/key`, { method: 'DELETE' }),
   },
 
   documents: {
@@ -109,7 +118,9 @@ export const api = {
   },
 
   models: {
-    list: () => request<{ id: string; name: string }[]>('/api/models'),
+    // With a sessionId: the models that session can use (every model once it has its own key)
+    list: (sessionId?: string) =>
+      request<{ id: string; name: string }[]>(`/api/models${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''}`),
   },
 
   messages: {
@@ -128,11 +139,18 @@ export const api = {
         method: 'PATCH',
         body: JSON.stringify(data),
       }),
-    create: (sessionId: string, fromMessageId: string, model: string, name?: string, documentIds?: string[]) =>
+    create: (sessionId: string, fromMessageId: string, model: string, name?: string, documentIds?: string[], purpose?: string) =>
       request<import('@tandem/shared').Branch>(`/api/sessions/${sessionId}/branches`, {
         method: 'POST',
-        body: JSON.stringify({ fromMessageId, model, name, documentIds }),
+        body: JSON.stringify({ fromMessageId, model, name, documentIds, purpose }),
       }),
+    updateContext: (branchId: string, content: string, baseUpdatedAt: string | null) =>
+      request<import('@tandem/shared').Branch>(`/api/branches/${branchId}/context`, {
+        method: 'PUT',
+        body: JSON.stringify({ content, baseUpdatedAt }),
+      }),
+    regenerateContext: (branchId: string) =>
+      request<import('@tandem/shared').Branch>(`/api/branches/${branchId}/context/regenerate`, { method: 'POST' }),
     setDocuments: (branchId: string, documentIds: string[]) =>
       request<import('@tandem/shared').Branch>(`/api/branches/${branchId}/documents`, {
         method: 'PUT',

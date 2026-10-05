@@ -45,6 +45,19 @@ export const branches = sqliteTable('branches', {
   headMessageId: text('head_message_id'),
   createdAt: text('created_at').notNull(),
   documentIds: text('document_ids', { mode: 'json' }).$type<string[]>(), // null on main = all documents
+  purpose: text('purpose'), // null on main
+  branchContext: text('branch_context'), // cited summary from the parent branch; null on main or until written
+  branchContextUpdatedAt: text('branch_context_updated_at'),
+  branchContextUpdatedBy: text('branch_context_updated_by'), // a user id, or AI_AUTHOR
+})
+
+// A session's own OpenRouter key (BYOK), encrypted at rest. Read and decrypted only in src/ai/.
+export const sessionKeys = sqliteTable('session_keys', {
+  sessionId: text('session_id').primaryKey(),
+  keyCiphertext: text('key_ciphertext').notNull(),
+  keyLast4: text('key_last4').notNull(),
+  setBy: text('set_by').notNull(),
+  setAt: text('set_at').notNull(),
 })
 
 export const sessionDocuments = sqliteTable('session_documents', {
@@ -66,6 +79,9 @@ export const messages = sqliteTable('messages', {
   authorId: text('author_id').notNull(),
   agentLabel: text('agent_label'), // agent token label at post time, e.g. "Claude"
   sharedFromBranchId: text('shared_from_branch_id'), // set on a Share to main summary
+  kind: text('kind', { enum: ['text', 'ask_parent'] }).notNull().default('text'),
+  askQuestion: text('ask_question'), // ask_parent: the question (content holds the answer)
+  askedBranchId: text('asked_branch_id'), // ask_parent: the branch that answered
   model: text('model'),
   content: text('content').notNull().default(''),
   status: text('status', { enum: ['pending', 'streaming', 'done', 'error'] }).notNull().default('pending'),

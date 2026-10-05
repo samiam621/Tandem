@@ -34,7 +34,7 @@ async function runRefresh(sessionId: string, updatedBy: string): Promise<Session
     const main = db.select().from(branches).where(and(eq(branches.sessionId, sessionId), eq(branches.isMain, true))).get()!
     const input = briefInput(sessionId, session.brief, main.headMessageId)
     // A model error is the provider's, not the caller's: never pass its status (e.g. 401) through.
-    const summary = await summarize(main.model, input, BRIEF_PROMPT).catch((err: unknown) =>
+    const summary = await summarize(sessionId, main.model, input, BRIEF_PROMPT).catch((err: unknown) =>
       fail(502, 'upstream_error', `The model could not summarize main: ${err instanceof Error ? err.message : String(err)}`))
     const brief = summary.slice(0, BRIEF_MAX_CHARS)
     // Based on the version the summary read, so a teammate's save during generation wins (409).
@@ -96,7 +96,7 @@ function mainMessagesSinceBrief(sessionId: string): { count: number; headId: str
 }
 
 export function maybeAutoRefresh(sessionId: string, branchId: string) {
-  if (!aiConfigured() || refreshing.has(sessionId)) return
+  if (!aiConfigured(sessionId) || refreshing.has(sessionId)) return
   const branch = getDb().select({ isMain: branches.isMain }).from(branches).where(eq(branches.id, branchId)).get()
   if (!branch?.isMain) return
   const { count, headId } = mainMessagesSinceBrief(sessionId)

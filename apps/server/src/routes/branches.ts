@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify'
-import { UpdateBranchSchema, SetBranchDocumentsSchema } from '@tandem/shared'
+import { UpdateBranchSchema, SetBranchDocumentsSchema, UpdateBranchContextSchema } from '@tandem/shared'
 import { requireAuth } from '../middleware/auth.js'
 import { sendServiceError } from './errors.js'
 import { eq, and } from 'drizzle-orm'
@@ -9,6 +9,7 @@ import { bus } from '../events.js'
 import { shareBranch } from '../services/messages.js'
 import { rowToBranch } from '../services/branches.js'
 import { setBranchDocuments } from '../services/documents.js'
+import { updateBranchContext, regenerateBranchContext } from '../services/branchContext.js'
 
 export const branchRoutes: FastifyPluginAsync = async (app) => {
   // PATCH /api/branches/:id
@@ -48,6 +49,30 @@ export const branchRoutes: FastifyPluginAsync = async (app) => {
     }
     try {
       return reply.send(setBranchDocuments(req.actor!, id, body.data.documentIds))
+    } catch (err) {
+      return sendServiceError(reply, err)
+    }
+  })
+
+  // PUT /api/branches/:id/context — owner only
+  app.put('/api/branches/:id/context', { preHandler: requireAuth }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const body = UpdateBranchContextSchema.safeParse(req.body)
+    if (!body.success) {
+      return reply.code(400).send({ error: { code: 'invalid_request', message: body.error.message } })
+    }
+    try {
+      return reply.send(updateBranchContext(req.actor!, id, body.data.content, body.data.baseUpdatedAt))
+    } catch (err) {
+      return sendServiceError(reply, err)
+    }
+  })
+
+  // POST /api/branches/:id/context/regenerate — owner only
+  app.post('/api/branches/:id/context/regenerate', { preHandler: requireAuth }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    try {
+      return reply.send(await regenerateBranchContext(req.actor!, id))
     } catch (err) {
       return sendServiceError(reply, err)
     }

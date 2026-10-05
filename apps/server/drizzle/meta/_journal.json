@@ -43,6 +43,13 @@
       "when": 1791157585049,
       "tag": "0005_handy_ares",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1791165270230,
+      "tag": "0006_sudden_retro_girl",
+      "breakpoints": true
     }
   ]
 }

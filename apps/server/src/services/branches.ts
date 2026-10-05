@@ -4,6 +4,7 @@ import { getDb } from '../db/index.js'
 import { branches, sessionMembers, messages } from '../db/schema.js'
 import { bus } from '../events.js'
 import { sessionDocumentRows, validDocumentIds } from './documents.js'
+import { startBranchContext } from './branchContext.js'
 import type { Branch } from '@tandem/shared'
 
 function now() { return new Date().toISOString() }
@@ -20,6 +21,10 @@ export function rowToBranch(row: typeof branches.$inferSelect): Branch {
     headMessageId: row.headMessageId ?? null,
     createdAt: row.createdAt,
     documentIds: row.isMain ? null : row.documentIds ?? null,
+    purpose: row.purpose ?? null,
+    branchContext: row.branchContext ?? null,
+    branchContextUpdatedAt: row.branchContextUpdatedAt ?? null,
+    branchContextUpdatedBy: row.branchContextUpdatedBy ?? null,
   }
 }
 
@@ -30,6 +35,7 @@ export async function createBranch(
   model: string,
   name?: string,
   documentIds?: string[],
+  purpose?: string,
 ): Promise<Branch | null> {
   const db = getDb()
 
@@ -69,11 +75,14 @@ export async function createBranch(
     headMessageId: fromMessageId, // starts at the fork point
     createdAt: ts,
     documentIds: selection,
+    purpose: purpose ?? null,
   }).run()
 
   const branch = rowToBranch(db.select().from(branches).where(eq(branches.id, branchId)).get()!)
 
   bus.emitSession(sessionId, { type: 'branch_created', payload: branch })
+  // Its AI does not inherit the parent's raw history; AI writes a cited branch context instead.
+  startBranchContext(branch)
 
   return branch
 }

@@ -40,6 +40,8 @@ Paths below are relative to `apps/desktop/src/renderer/`.
 | `features/chat/MentionMenu.tsx` | Mention suggestions, member/agent presentation, text highlighting |
 | `features/chat/BriefPanel.tsx` | Shared brief adapter: manual edits, refresh from main, author metadata |
 | `features/chat/DocumentPanel.tsx` | Session document adapter: create, edit, delete, and conflict refetch |
+| `features/chat/BranchContextPanel.tsx` | Branch context adapter: owner edits and regenerates, others read only |
+| `features/chat/SessionKeyPanel.tsx` | Session OpenRouter key: owner sets, replaces, or removes it; members see its status |
 | `features/chat/TextEditorPanel.tsx` | Shared feature-level read/edit overlay, draft/version state, stale-draft feedback |
 | `features/settings/Settings.tsx` | Account, server URL, agent tokens, copyable MCP configuration |
 | `lib/api.ts` | REST calls, server URL and auth headers, error conversion; currently also declares the bridge type |
