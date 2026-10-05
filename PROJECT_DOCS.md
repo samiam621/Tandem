@@ -85,6 +85,59 @@ REST (every route needs `Authorization: Bearer`, and errors are `{ error: { code
 - [x] **CP1b: desktop UI (Bob).** Everything in Bob's checklist. *Gate:* typecheck passes, and the manual check above works.
 - [ ] **CP3: integration (both).** *Claude's part done on 2026-10-05: typecheck passes and 48 tests pass on `docs-server`, and the single-window flow passed in the real app (upload .md and .pdf, viewer, branch with one pin, an answer from the pinned doc plus an excerpt of the unpinned PDF, edit pins). Waiting on: fix B1 (Bob), then Sam's two-window check.* Bob has rebased onto `docs-server`, and typecheck and tests pass on the merged branch. Claude runs the single-window flow and Sam runs the two-window live check. *Then* tick build step 16 in ARCHITECTURE.md.
 
+## Round 2: close the open items (Bob builds, Claude reviews, Sam merges)
+
+**Ownership for this round only:** Bob may also edit the files named in R2-A and R2-C. Those are normally Claude's. Everything else follows the usual table.
+
+### R2-A: production hotfix PR to `main` (Bob). Do this first: it doesn't wait for the docs feature.
+
+Production is broken in two ways.
+- **Missing brief columns.** A fresh database never gets the brief columns, and Render's database is fresh on every deploy, so creating a session fails.
+- **Retired default model.** `meta-llama/llama-3.3-70b-instruct:free` is no longer free on OpenRouter ("This model is unavailable for free").
+
+- [ ] Branch `fix/prod-brief-and-model` from `origin/main`, then run `git cherry-pick 2568859`. Claude has checked that it applies cleanly onto `origin/main`.
+- [ ] Replace `meta-llama/llama-3.3-70b-instruct:free` with **`qwen/qwen3.8-27b:free`** in these files. It is listed by OpenRouter as of 2026-10-05, and it answered correctly in Claude's end-to-end run.
+  - `apps/server/src/ai/models.ts`: `DEV_FREE_MODELS`, with name `'Qwen3.8 27B (Free)'`
+  - `apps/server/scripts/e2e.mjs`: both places
+  - `packages/shared/src/index.ts`: the comment only
+  - `packages/shared/src/index.test.ts`
+  - **Do not** edit `drizzle/0004_free_models.sql`, because migrations that have already been applied must never change.
+- [ ] `npm run typecheck` and `npm test` pass. Then run `git grep -n "llama-3.3-70b-instruct" -- . ':!*/dist/*' ':!apps/server/drizzle/*'`, and only `BOB.md` should match.
+- [ ] Push, then open the PR to `main`. Its title is "Fix fresh-DB brief columns and retire the dead default model". In the body, say what each fix does and paste the test output.
+
+### R2-B: desktop fixes on `docs-server` (Bob)
+
+- [ ] **B1:** in the Pinned docs modal, make each checkbox a controlled input with `checked={pb.pinnedDocIds.includes(doc.id)}`. Disable all of them while a PATCH is in flight. On an error, show the message in the modal.
+- [ ] **N1:** in the `branch_created` handler, skip a branch that is already in the list, the same guard `doc_created` uses. Then a new branch appears once.
+- [ ] **N3:** show the uploader's display name on each doc in the card. Members are already in SessionView state.
+- [ ] Leave **N2** (refetch after reconnect) alone: it's a separate fix.
+
+### R2-C: retire the stored model ids on `docs-server` (Bob, after R2-A is merged)
+
+- [ ] Run `git merge origin/main` into `docs-server`. The hotfix contains the same `0005` change, so it should merge cleanly. If `_journal.json` conflicts, keep the version on `docs-server`.
+- [ ] Add a custom migration **0007_retire_llama**. From `apps/server`, run `npx drizzle-kit generate --custom --name retire_llama`, then **set its `"when"` in `_journal.json` to `1791200000003`**. Use this SQL:
+  ```sql
+  UPDATE branches SET model = 'qwen/qwen3.8-27b:free' WHERE model = 'meta-llama/llama-3.3-70b-instruct:free';
+  --> statement-breakpoint
+  UPDATE sessions SET default_model = 'qwen/qwen3.8-27b:free' WHERE default_model = 'meta-llama/llama-3.3-70b-instruct:free';
+  ```
+  This is needed because main branches have no owner and can't be PATCHed. Without it, old local sessions stay stuck on the dead model.
+- [ ] `npm run typecheck` and `npm test` pass. Commit, push, and tick the boxes here.
+
+### R2 review gates (Claude)
+
+- [ ] **R2-A PR:** read the diff. Check the cherry-pick matches `2568859`. On the PR branch, check that a fresh scratch DB gets the `brief*` columns, and that typecheck and tests pass.
+- [ ] **R2-B:** rerun the desktop driver flow. Rapidly untick two pins and confirm the UI matches the server. Create a branch and confirm it's listed once. Confirm the uploader name is shown.
+- [ ] **R2-C:** run the migrations on a copy of Sam's local `tandem.db`. Confirm no branch or session keeps the llama id, and confirm a reply on an old session's main branch works.
+- [ ] Write the review results here. Any blocker goes back to Bob.
+
+### Sam's steps
+
+- [ ] Tell Bob to start R2-A, then R2-B and R2-C.
+- [ ] After Claude approves the hotfix PR, merge it to `main`. Once Render redeploys, create a session on the hosted app and send a message. Both should work.
+- [ ] After Claude approves R2-B and R2-C: run the two-window check (`npm run dev` and `npm run dev:second`, both signed in, same session). Upload a doc in one window and watch it appear in the other. Then change pins in one window and watch the count update in the other.
+- [ ] Tick build step 16 in ARCHITECTURE.md (CP3), then open and merge the `docs-server` PR.
+
 ## Rules
 
 - Stay inside the files you own. **Never change `packages/shared` without asking here first.**
