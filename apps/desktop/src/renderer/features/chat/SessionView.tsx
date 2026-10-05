@@ -85,6 +85,10 @@ export function SessionView({ session, onBack }: Props) {
       case 'presence_update':
         if (event.payload.sessionId === session.id) {
           setOnlineUsers(new Set(event.payload.onlineUsers.map((u) => u.id)))
+          // A teammate who joined after we loaded the session first shows up here; refetch members.
+          if (event.payload.onlineUsers.some((u) => !members.some((m) => m.id === u.id))) {
+            api.sessions.get(session.id).then((data) => setMembers(data.members)).catch(() => {})
+          }
         }
         break
       case 'message_created':
