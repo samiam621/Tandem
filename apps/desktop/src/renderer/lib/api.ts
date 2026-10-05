@@ -21,17 +21,19 @@ async function getBase(): Promise<string> {
   return window.tandem.getServerUrl()
 }
 
-async function getHeaders(): Promise<HeadersInit> {
+// Content-Type only with a body: the server rejects an empty body labeled as JSON (e.g. a body-less
+// POST to /share or DELETE).
+async function getHeaders(hasBody: boolean): Promise<HeadersInit> {
   const token = await window.tandem.getToken()
   return {
-    'Content-Type': 'application/json',
+    ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   }
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const base = await getBase()
-  const headers = await getHeaders()
+  const headers = await getHeaders(init?.body != null)
   const res = await fetch(`${base}${path}`, { ...init, headers: { ...headers, ...(init?.headers ?? {}) } })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
