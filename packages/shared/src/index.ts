@@ -3,7 +3,7 @@ import { z } from 'zod'
 // ─── Free model helpers ───────────────────────────────────────────────────────
 
 // Returns true only if the model ID ends with the `:free` variant suffix.
-// OpenRouter free models always carry this suffix, e.g. "meta-llama/llama-3.3-70b-instruct:free".
+// OpenRouter free models always carry this suffix, e.g. "qwen/qwen3.8-27b:free".
 export function isFreeModelId(modelId: string): boolean {
   return modelId.endsWith(':free')
 }
