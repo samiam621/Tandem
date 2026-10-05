@@ -59,22 +59,22 @@ REST (every route needs `Authorization: Bearer`, and errors are `{ error: { code
 
 ## Bob's checklist (desktop, `apps/desktop/src/renderer`)
 
-- [ ] **`lib/api.ts`**
+- [x] **`lib/api.ts`**
   - `docs.list(sessionId)`, `docs.get(docId)`, `docs.upload(sessionId, body)`, `docs.delete(docId)`.
   - `branches.create(..., docIds?)` and the branch update call with `pinnedDocIds`.
   - Types come from `@tandem/shared`. Don't redefine them.
-- [ ] **`features/chat/ProjectDocs.tsx`**: a card under the Project brief card in SessionView's left column.
+- [x] **`features/chat/ProjectDocs.tsx`**: a card under the Project brief card in SessionView's left column.
   - List each doc's title, size (`chars`), and uploader name.
   - Add an **Upload** button using `<input type="file" accept=".md,.markdown,.txt,.json,.yaml,.yml,.csv,.ts,.tsx,.js,.py,.go,.rs,.java,.sql,.html,.css,.pdf">`.
     - For a text file, call `file.text()` and send `{ title: file.name, text }`.
     - For a PDF, read its `arrayBuffer()`, base64 it, and send `{ title: file.name, pdfBase64 }`. Refuse anything over `DOC_UPLOAD_MAX_BYTES` before sending.
     - Show the server's error message on a 400 (for example, a scanned PDF with no text).
-- [ ] **Doc viewer**: clicking a doc opens a read-only modal shaped like `BriefPanel.tsx`, showing the content from `docs.get`. The uploader or the session owner also sees **Delete**.
-- [ ] **Live updates**: handle `doc_created` and `doc_deleted` in SessionView's WS event switch (next to `brief_updated`), and load the list from `docs.list` on open and on reconnect.
-- [ ] **Branch dialog** (`SessionView.tsx`, `handleBranch`): add a "Pin docs to this branch" checkbox list (none ticked by default) and pass the ticked ids as `docIds`.
-- [ ] **Pinned docs control**: the branch owner gets a "Pinned docs (N)" button in the branch header. It opens the same checkbox list and saves with `pinnedDocIds`. Other members see the count read-only. Main has no owner, so it shows nothing.
-- [ ] **ARCHITECTURE.md § Screens**: describe the Project docs card, the viewer, the branch-dialog checkboxes, and the pinned-docs control.
-- [ ] `npm run typecheck` and `npm test` pass.
+- [x] **Doc viewer**: clicking a doc opens a read-only modal shaped like `BriefPanel.tsx`, showing the content from `docs.get`. The uploader or the session owner also sees **Delete**.
+- [x] **Live updates**: handle `doc_created` and `doc_deleted` in SessionView's WS event switch (next to `brief_updated`), and load the list from `docs.list` on open and on reconnect.
+- [x] **Branch dialog** (`SessionView.tsx`, `handleBranch`): add a "Pin docs to this branch" checkbox list (none ticked by default) and pass the ticked ids as `docIds`.
+- [x] **Pinned docs control**: the branch owner gets a "Pinned docs (N)" button in the branch header. It opens the same checkbox list and saves with `pinnedDocIds`. Other members see the count read-only. Main has no owner, so it shows nothing.
+- [x] **ARCHITECTURE.md § Screens**: describe the Project docs card, the viewer, the branch-dialog checkboxes, and the pinned-docs control.
+- [x] `npm run typecheck` and `npm test` pass.
 - [ ] Against the `docs-server` server (`npm run dev`): upload a `.md` and a `.pdf` and they appear in the list. Create a branch with one ticked, and the branch shows "Pinned docs (1)".
 
 ## Checkpoints
@@ -82,7 +82,7 @@ REST (every route needs `Authorization: Bearer`, and errors are `{ error: { code
 - [x] **CP0: contract frozen (Claude).** The shared types and schemas, migrations `0005_session_brief` and `0006_project_docs`, and this file. *Gate:* `npm run typecheck` passes.
 - [x] **CP1a: server API (Claude).** The docs service, REST, PDF extraction, pins, WS events, and integration tests. *Gate:* `npm test` passes, and curl uploads, lists, and gets a `.md` and a `.pdf`.
 - [x] **CP2: AI context and MCP (Claude).** Retrieval, the context builder, the 3 MCP tools, and unit tests. *Gate:* an MCP `search_project_docs` call over curl returns the expected passage.
-- [ ] **CP1b: desktop UI (Bob).** Everything in Bob's checklist. *Gate:* typecheck passes, and the manual check above works.
+- [x] **CP1b: desktop UI (Bob).** Everything in Bob's checklist. *Gate:* typecheck passes, and the manual check above works.
 - [ ] **CP3: integration (both).** Bob has rebased onto `docs-server`, and typecheck and tests pass on the merged branch. Claude runs the single-window flow and Sam runs the two-window live check. *Then* tick build step 16 in ARCHITECTURE.md.
 
 ## Rules
