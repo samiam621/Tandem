@@ -27,6 +27,8 @@ Three problems are left:
 
 Free models cost nothing, so these no longer protect anything.
 
+**Never touch `.env` files.** Never look inside them: no `cat`, `grep`, or checks of whether a key is set. Don't overwrite, move, delete, or recreate them. They hold Sam's secrets, and a lost OpenRouter key can't be copied again. That rules out `cp .env.example .env`, `git clean -x`, `git stash -a`, and checking out commits older than `27e20f7`. If something needs a new env value, stop and ask Sam to set it. The full rule is in AGENTS.md § Hard rules.
+
 ---
 
 ## Checklist

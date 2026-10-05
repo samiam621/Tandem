@@ -16,6 +16,8 @@ Tandem is a multiplayer AI chat desktop app. It is an Electron client talking to
 - **Validate every request body** with a Zod schema from `packages/shared`. Return errors as `{ error: { code, message } }` with a matching HTTP status.
 - **Keep Electron locked down:** `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`. Windows load only bundled content. The renderer reaches the main process only through the preload API.
 - **Define each type once**, in `packages/shared`, and import it from there.
+- **Never look inside a `.env` file.** No `cat`, `grep`, `head`, editor reads, or checks of whether a key is set or empty. To debug config, read `.env.example` and the code that uses the variable, then ask the user to check their file. Starting the app, which loads it, is fine.
+- **Never overwrite, move, delete, or recreate a `.env` file.** It holds secrets that can't be recovered (OpenRouter shows a key only once). The server reads `apps/server/.env`. Never run `cp .env.example .env`, redirect output into a `.env`, or write one with an editor tool. Avoid git commands that replace ignored files: `git clean -x`, `git stash -a`, and checking out commits older than `27e20f7`, which still track `apps/server/.env`. If a task seems to need a `.env` change, stop and tell the user which variable to set.
 
 ## Working the build plan
 
