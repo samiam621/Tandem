@@ -10,7 +10,7 @@ export interface OpenRouterModel {
 // Fallback list used in dev when there is no OPENROUTER_API_KEY.
 // The default free model lives here so it's easy to swap if the ID changes.
 const DEV_FREE_MODELS: OpenRouterModel[] = [
-  { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B (Free)' },
+  { id: 'qwen/qwen3.8-27b:free', name: 'Qwen3.8 27B (Free)' },
 ]
 
 // Re-export so routes/services that only need isFreeModelId don't have to
