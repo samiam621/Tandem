@@ -95,34 +95,34 @@ Production is broken in two ways.
 - **Missing brief columns.** A fresh database never gets the brief columns, and Render's database is fresh on every deploy, so creating a session fails.
 - **Retired default model.** `meta-llama/llama-3.3-70b-instruct:free` is no longer free on OpenRouter ("This model is unavailable for free").
 
-- [ ] Branch `fix/prod-brief-and-model` from `origin/main`, then run `git cherry-pick 2568859`. Claude has checked that it applies cleanly onto `origin/main`.
-- [ ] Replace `meta-llama/llama-3.3-70b-instruct:free` with **`qwen/qwen3.8-27b:free`** in these files. It is listed by OpenRouter as of 2026-10-05, and it answered correctly in Claude's end-to-end run.
+- [x] Branch `fix/prod-brief-and-model` from `origin/main`, then run `git cherry-pick 2568859`. Claude has checked that it applies cleanly onto `origin/main`.
+- [x] Replace `meta-llama/llama-3.3-70b-instruct:free` with **`qwen/qwen3.8-27b:free`** in these files. It is listed by OpenRouter as of 2026-10-05, and it answered correctly in Claude's end-to-end run.
   - `apps/server/src/ai/models.ts`: `DEV_FREE_MODELS`, with name `'Qwen3.8 27B (Free)'`
   - `apps/server/scripts/e2e.mjs`: both places
   - `packages/shared/src/index.ts`: the comment only
   - `packages/shared/src/index.test.ts`
   - **Do not** edit `drizzle/0004_free_models.sql`, because migrations that have already been applied must never change.
-- [ ] `npm run typecheck` and `npm test` pass. Then run `git grep -n "llama-3.3-70b-instruct" -- . ':!*/dist/*' ':!apps/server/drizzle/*'`, and only `BOB.md` should match.
-- [ ] Push, then open the PR to `main`. Its title is "Fix fresh-DB brief columns and retire the dead default model". In the body, say what each fix does and paste the test output.
+- [x] `npm run typecheck` and `npm test` pass. Then run `git grep -n "llama-3.3-70b-instruct" -- . ':!*/dist/*' ':!apps/server/drizzle/*'`, and only `BOB.md` should match.
+- [x] Push, then open the PR to `main`. Its title is "Fix fresh-DB brief columns and retire the dead default model". In the body, say what each fix does and paste the test output.
 
 ### R2-B: desktop fixes on `docs-server` (Bob)
 
-- [ ] **B1:** in the Pinned docs modal, make each checkbox a controlled input with `checked={pb.pinnedDocIds.includes(doc.id)}`. Disable all of them while a PATCH is in flight. On an error, show the message in the modal.
-- [ ] **N1:** in the `branch_created` handler, skip a branch that is already in the list, the same guard `doc_created` uses. Then a new branch appears once.
-- [ ] **N3:** show the uploader's display name on each doc in the card. Members are already in SessionView state.
+- [x] **B1:** in the Pinned docs modal, make each checkbox a controlled input with `checked={pb.pinnedDocIds.includes(doc.id)}`. Disable all of them while a PATCH is in flight. On an error, show the message in the modal.
+- [x] **N1:** in the `branch_created` handler, skip a branch that is already in the list, the same guard `doc_created` uses. Then a new branch appears once.
+- [x] **N3:** show the uploader's display name on each doc in the card. Members are already in SessionView state.
 - [ ] Leave **N2** (refetch after reconnect) alone: it's a separate fix.
 
 ### R2-C: retire the stored model ids on `docs-server` (Bob, after R2-A is merged)
 
-- [ ] Run `git merge origin/main` into `docs-server`. The hotfix contains the same `0005` change, so it should merge cleanly. If `_journal.json` conflicts, keep the version on `docs-server`.
-- [ ] Add a custom migration **0007_retire_llama**. From `apps/server`, run `npx drizzle-kit generate --custom --name retire_llama`, then **set its `"when"` in `_journal.json` to `1791200000003`**. Use this SQL:
+- [x] Run `git merge origin/main` into `docs-server`. The hotfix contains the same `0005` change, so it should merge cleanly. If `_journal.json` conflicts, keep the version on `docs-server`.
+- [x] Add a custom migration **0007_retire_llama**. From `apps/server`, run `npx drizzle-kit generate --custom --name retire_llama`, then **set its `"when"` in `_journal.json` to `1791200000003`**. Use this SQL:
   ```sql
   UPDATE branches SET model = 'qwen/qwen3.8-27b:free' WHERE model = 'meta-llama/llama-3.3-70b-instruct:free';
   --> statement-breakpoint
   UPDATE sessions SET default_model = 'qwen/qwen3.8-27b:free' WHERE default_model = 'meta-llama/llama-3.3-70b-instruct:free';
   ```
   This is needed because main branches have no owner and can't be PATCHed. Without it, old local sessions stay stuck on the dead model.
-- [ ] `npm run typecheck` and `npm test` pass. Commit, push, and tick the boxes here.
+- [x] `npm run typecheck` and `npm test` pass. Commit, push, and tick the boxes here.
 
 ### R2 review gates (Claude)
 
