@@ -67,7 +67,9 @@ export async function getBranchContext(actor: Actor, branchId: string, limit: nu
 
   const db = getDb()
   const sessionId = db.select({ sessionId: branches.sessionId }).from(branches).where(eq(branches.id, branchId)).get()!.sessionId
-  const session = db.select({ id: sessions.id, title: sessions.title }).from(sessions).where(eq(sessions.id, sessionId)).get()!
+  const { brief, briefUpdatedAt, ...session } = db
+    .select({ id: sessions.id, title: sessions.title, brief: sessions.brief, briefUpdatedAt: sessions.briefUpdatedAt })
+    .from(sessions).where(eq(sessions.id, sessionId)).get()!
   const sessionBranches = (await getSessionBranches(actor, sessionId))!
   const branch = sessionBranches.find((b) => b.id === branchId)!
 
@@ -83,6 +85,8 @@ export async function getBranchContext(actor: Actor, branchId: string, limit: nu
 
   return {
     session,
+    brief,
+    briefUpdatedAt,
     branch: { ...branch, ownerDisplayName: ownerName(branch.ownerId) },
     forkedFrom: fork ? { branchId: fork.branchId, branchName: branchName.get(fork.branchId) ?? '', messageId: fork.id } : null,
     messages: path.slice(-limit).map((m) => ({

@@ -39,6 +39,12 @@ export const PostMessageSchema = z.object({
     content: z.string().min(1),
     triggerAi: z.boolean().default(true),
 });
+export const BRIEF_MAX_CHARS = 20000;
+// baseUpdatedAt is the briefUpdatedAt the edit started from; a mismatch means someone saved in between.
+export const UpdateBriefSchema = z.object({
+    content: z.string().max(BRIEF_MAX_CHARS),
+    baseUpdatedAt: z.string().nullable(),
+});
 export const CreateTokenSchema = z.object({
     label: z.string().min(1).max(64),
 });

@@ -1,5 +1,5 @@
 import { nanoid } from 'nanoid'
-import { eq, and, inArray } from 'drizzle-orm'
+import { eq, and, inArray, isNull } from 'drizzle-orm'
 import { getDb } from '../db/index.js'
 import { sessions, sessionMembers, branches, users, apiTokens } from '../db/schema.js'
 import { bus } from '../events.js'
@@ -15,6 +15,9 @@ function rowToSession(row: typeof sessions.$inferSelect): Session {
     defaultModel: row.defaultModel,
     inviteCode: row.inviteCode,
     createdAt: row.createdAt,
+    brief: row.brief,
+    briefUpdatedAt: row.briefUpdatedAt ?? null,
+    briefUpdatedBy: row.briefUpdatedBy ?? null,
   }
 }
 
@@ -70,7 +73,7 @@ export async function createSession(
       id: branchId,
       sessionId,
       ownerId: null,
-      isMain: 1 as unknown as boolean,
+      isMain: true,
       name: 'main',
       model: defaultModel,
       forkMessageId: null,
@@ -216,6 +219,43 @@ export async function listSessionAgents(
     ownerName,
     active: token.lastUsedAt !== null && Date.now() - Date.parse(token.lastUsedAt) < ACTIVE_MS,
   }))
+}
+
+// ─── Project brief ────────────────────────────────────────────────────────────
+// Any member may edit. baseUpdatedAt must match the stored briefUpdatedAt so a save never
+// silently overwrites a teammate's newer version.
+
+export function updateBrief(
+  actor: { userId: string },
+  sessionId: string,
+  content: string,
+  baseUpdatedAt: string | null,
+): Session {
+  const db = getDb()
+  if (!isSessionMember(sessionId, actor.userId)) {
+    throw Object.assign(new Error('Session not found'), { code: 'not_found', status: 404 })
+  }
+  // briefUpdatedAt doubles as the version, so it must strictly increase even for saves in the same millisecond.
+  const ts = baseUpdatedAt && Date.parse(now()) <= Date.parse(baseUpdatedAt)
+    ? new Date(Date.parse(baseUpdatedAt) + 1).toISOString()
+    : now()
+  const res = db.update(sessions)
+    .set({ brief: content, briefUpdatedAt: ts, briefUpdatedBy: actor.userId })
+    .where(and(
+      eq(sessions.id, sessionId),
+      baseUpdatedAt === null ? isNull(sessions.briefUpdatedAt) : eq(sessions.briefUpdatedAt, baseUpdatedAt),
+    ))
+    .run()
+  if (res.changes === 0) {
+    throw Object.assign(new Error('Someone updated the brief since you started editing'), { code: 'conflict', status: 409 })
+  }
+
+  const session = rowToSession(db.select().from(sessions).where(eq(sessions.id, sessionId)).get()!)
+  bus.emitSession(sessionId, {
+    type: 'brief_updated',
+    payload: { sessionId, brief: session.brief, briefUpdatedAt: ts, briefUpdatedBy: actor.userId },
+  })
+  return session
 }
 
 // ─── Membership ───────────────────────────────────────────────────────────────
