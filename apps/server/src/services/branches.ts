@@ -50,7 +50,7 @@ export async function createBranch(
     id: branchId,
     sessionId,
     ownerId: actor.userId,
-    isMain: 0 as unknown as boolean,
+    isMain: false,
     name: branchName,
     model,
     forkMessageId: fromMessageId,

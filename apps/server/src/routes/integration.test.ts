@@ -27,7 +27,7 @@ function buildTestDb() {
   sqlite.pragma('foreign_keys = ON')
   sqlite.exec(`
     CREATE TABLE users (id TEXT PRIMARY KEY, kind TEXT NOT NULL, display_name TEXT NOT NULL, github_id TEXT, device_id TEXT, avatar_url TEXT, created_at TEXT NOT NULL);
-    CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, owner_id TEXT NOT NULL, default_model TEXT NOT NULL, invite_code TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
+    CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, owner_id TEXT NOT NULL, default_model TEXT NOT NULL, invite_code TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, brief TEXT NOT NULL DEFAULT '', brief_updated_at TEXT, brief_updated_by TEXT);
     CREATE TABLE session_members (session_id TEXT NOT NULL, user_id TEXT NOT NULL, joined_at TEXT NOT NULL, last_seen_at TEXT NOT NULL);
     CREATE TABLE branches (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, owner_id TEXT, is_main INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL, model TEXT NOT NULL, fork_message_id TEXT, head_message_id TEXT, created_at TEXT NOT NULL);
     CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, branch_id TEXT NOT NULL, parent_id TEXT, author_type TEXT NOT NULL, author_id TEXT NOT NULL, agent_label TEXT, shared_from_branch_id TEXT, model TEXT, content TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL);
@@ -324,6 +324,41 @@ describe('REST integration', () => {
     })).json()
     const res = await app.inject({ method: 'POST', url: `/api/branches/${empty.id}/share`, headers: auth })
     expect(res.statusCode).toBe(400)
+  })
+
+  it('PUT /api/sessions/:id/brief: any member edits, stale saves conflict, branches see the latest brief', async () => {
+    const put = (tok: string, payload: object) =>
+      app.inject({ method: 'PUT', url: `/api/sessions/${sessionId}/brief`, headers: { authorization: `Bearer ${tok}` }, payload })
+    const seen: any[] = []
+    const onEvent = ({ event }: any) => event.type === 'brief_updated' && seen.push(event.payload)
+    bus.onSession(onEvent)
+
+    // First save starts from null; it was made after the bugfix branch forked.
+    const first = await put(token, { content: 'Use Postgres.', baseUpdatedAt: null })
+    expect(first.statusCode).toBe(200)
+    expect(first.json()).toMatchObject({ brief: 'Use Postgres.', briefUpdatedBy: userId })
+    const v1 = first.json().briefUpdatedAt
+    expect(seen.at(-1)).toEqual({ sessionId, brief: 'Use Postgres.', briefUpdatedAt: v1, briefUpdatedBy: userId })
+
+    // Another member edits from v1; a save still based on null (or v1 afterwards) is refused.
+    expect((await put(user2Token, { content: 'Use Postgres 16.', baseUpdatedAt: v1 })).statusCode).toBe(200)
+    const stale = await put(token, { content: 'Use SQLite.', baseUpdatedAt: v1 })
+    expect(stale.statusCode).toBe(409)
+    expect(stale.json().error.code).toBe('conflict')
+    expect((await put(token, { content: 'x', baseUpdatedAt: null })).statusCode).toBe(409)
+
+    expect((await put(token, { content: 'x'.repeat(20001), baseUpdatedAt: null })).statusCode).toBe(400)
+    const mallory = (await app.inject({
+      method: 'POST', url: '/api/auth/guest', payload: { displayName: 'Mallory', deviceId: 'device-mallory-brief' },
+    })).json().token
+    expect((await put(mallory, { content: 'pwned', baseUpdatedAt: null })).statusCode).toBe(404)
+
+    // A branch forked before the edits still gets the latest brief.
+    const claude = (await resolveToken(claudeToken))!
+    const ctx = (await getBranchContext(claude, bugfixBranchId, 200))!
+    expect(ctx.brief).toBe('Use Postgres 16.')
+    expect(ctx.briefUpdatedAt).not.toBe(v1)
+    bus.offSession(onEvent)
   })
 
   it('setWorking announces "<label> is working" until the agent posts', async () => {

@@ -83,6 +83,11 @@ export const api = {
       request<import('@tandem/shared').Branch[]>(`/api/sessions/${id}/branches`),
     agents: (id: string) =>
       request<import('@tandem/shared').SessionAgent[]>(`/api/sessions/${id}/agents`),
+    updateBrief: (id: string, content: string, baseUpdatedAt: string | null) =>
+      request<import('@tandem/shared').Session>(`/api/sessions/${id}/brief`, {
+        method: 'PUT',
+        body: JSON.stringify({ content, baseUpdatedAt }),
+      }),
   },
 
   models: {

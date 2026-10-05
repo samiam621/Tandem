@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "dev": "concurrently -k -n server,desktop -c cyan,magenta \"npm run dev --workspace=apps/server\" \"npm run dev --workspace=apps/desktop\"",
+    "dev:second": "npm run dev:second --workspace=apps/desktop",
     "build:mac": "npm run build --workspace=apps/desktop -- --mac",
     "build:win": "npm run build --workspace=apps/desktop -- --win",
     "typecheck": "tsc --build tsconfig.json",

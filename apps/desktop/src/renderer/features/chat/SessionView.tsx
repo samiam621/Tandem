@@ -5,6 +5,7 @@ import { useAuth } from '../../app/AuthContext'
 import { useWebSocket } from '../../lib/useWebSocket'
 import { MessageTreePanel } from './MessageTreePanel'
 import { MentionMenu, buildMentionItems, highlightMentions } from './MentionMenu'
+import { BriefPanel, type BriefState } from './BriefPanel'
 
 interface Props {
   session: Session
@@ -36,6 +37,13 @@ export function SessionView({ session, onBack, onSettings }: Props) {
   const [sharingBranchId, setSharingBranchId] = useState<string | null>(null)
   const [shareConfirm, setShareConfirm] = useState(false)
   const [shareError, setShareError] = useState<string | null>(null)
+  // ── Project brief ────────────────────────────────────────────────────────────
+  const [brief, setBrief] = useState<BriefState>({
+    brief: session.brief ?? '',
+    briefUpdatedAt: session.briefUpdatedAt ?? null,
+    briefUpdatedBy: session.briefUpdatedBy ?? null,
+  })
+  const [briefOpen, setBriefOpen] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<HTMLInputElement>(null)
 
@@ -135,6 +143,12 @@ export function SessionView({ session, onBack, onSettings }: Props) {
       case 'branch_updated':
         setBranches((prev) => prev.map((b) => b.id === event.payload.id ? event.payload : b))
         break
+      case 'brief_updated':
+        if (event.payload.sessionId === session.id) {
+          const { brief, briefUpdatedAt, briefUpdatedBy } = event.payload
+          setBrief({ brief, briefUpdatedAt, briefUpdatedBy })
+        }
+        break
       case 'typing':
         if (event.payload.branchId !== activeBranchId) break
         {
@@ -178,7 +192,11 @@ export function SessionView({ session, onBack, onSettings }: Props) {
       const main = data.find((b) => b.isMain)
       if (main) setActiveBranchId(main.id)
     })
-    api.sessions.get(session.id).then((data) => setMembers(data.members))
+    api.sessions.get(session.id).then((data) => {
+      setMembers(data.members)
+      const { brief, briefUpdatedAt, briefUpdatedBy } = data.session
+      setBrief({ brief, briefUpdatedAt, briefUpdatedBy })
+    })
     fetchAgents()
   }, [session.id, fetchAgents])
 
@@ -427,6 +445,17 @@ export function SessionView({ session, onBack, onSettings }: Props) {
             </button>
           </div>
 
+          {/* Project brief — the spec every branch's AI reads */}
+          <button
+            onClick={() => setBriefOpen(true)}
+            className="mx-2 my-2 rounded-lg border border-gray-800 px-2.5 py-2 text-left hover:bg-gray-800"
+          >
+            <div className="text-xs font-semibold text-gray-300">Project brief</div>
+            <div className="text-[10px] text-gray-500 truncate">
+              {brief.brief ? brief.brief.split('\n').find((l) => l.trim()) : 'Add specs every branch sees'}
+            </div>
+          </button>
+
           {/* Members — capped height so long lists don't push branches off screen */}
           <div className="px-3 py-2 border-b border-gray-800 max-h-36 overflow-y-auto">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Members</p>
@@ -614,6 +643,16 @@ export function SessionView({ session, onBack, onSettings }: Props) {
           />
         </div>
       </div>
+
+      {briefOpen && (
+        <BriefPanel
+          sessionId={session.id}
+          current={brief}
+          members={members}
+          onChange={setBrief}
+          onClose={() => setBriefOpen(false)}
+        />
+      )}
     </div>
   )
 }

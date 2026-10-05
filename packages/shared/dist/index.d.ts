@@ -19,6 +19,9 @@ export interface Session {
     defaultModel: string;
     inviteCode: string;
     createdAt: string;
+    brief: string;
+    briefUpdatedAt: string | null;
+    briefUpdatedBy: string | null;
 }
 export interface Branch {
     id: string;
@@ -111,11 +114,11 @@ export declare const UpdateBranchSchema: z.ZodObject<{
     name: z.ZodOptional<z.ZodString>;
     model: z.ZodOptional<z.ZodEffects<z.ZodString, string, string>>;
 }, "strip", z.ZodTypeAny, {
-    name?: string | undefined;
     model?: string | undefined;
+    name?: string | undefined;
 }, {
-    name?: string | undefined;
     model?: string | undefined;
+    name?: string | undefined;
 }>;
 export declare const PostMessageSchema: z.ZodObject<{
     content: z.ZodString;
@@ -126,6 +129,17 @@ export declare const PostMessageSchema: z.ZodObject<{
 }, {
     content: string;
     triggerAi?: boolean | undefined;
+}>;
+export declare const BRIEF_MAX_CHARS = 20000;
+export declare const UpdateBriefSchema: z.ZodObject<{
+    content: z.ZodString;
+    baseUpdatedAt: z.ZodNullable<z.ZodString>;
+}, "strip", z.ZodTypeAny, {
+    content: string;
+    baseUpdatedAt: string | null;
+}, {
+    content: string;
+    baseUpdatedAt: string | null;
 }>;
 export declare const CreateTokenSchema: z.ZodObject<{
     label: z.ZodString;
@@ -216,7 +230,16 @@ export interface WsTypingEvent {
         agentLabel?: string;
     };
 }
-export type WsServerEvent = WsPresenceUpdateEvent | WsMessageCreatedEvent | WsAssistantDeltaEvent | WsAssistantDoneEvent | WsAssistantErrorEvent | WsBranchCreatedEvent | WsBranchUpdatedEvent | WsTypingEvent;
+export interface WsBriefUpdatedEvent {
+    type: 'brief_updated';
+    payload: {
+        sessionId: string;
+        brief: string;
+        briefUpdatedAt: string;
+        briefUpdatedBy: string;
+    };
+}
+export type WsServerEvent = WsPresenceUpdateEvent | WsMessageCreatedEvent | WsAssistantDeltaEvent | WsAssistantDoneEvent | WsAssistantErrorEvent | WsBranchCreatedEvent | WsBranchUpdatedEvent | WsTypingEvent | WsBriefUpdatedEvent;
 export interface McpSessionSummary {
     id: string;
     title: string;
@@ -259,6 +282,8 @@ export interface McpBranchContext {
         id: string;
         title: string;
     };
+    brief: string;
+    briefUpdatedAt: string | null;
     branch: Branch & {
         ownerDisplayName: string | null;
     };

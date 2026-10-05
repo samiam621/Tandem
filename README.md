@@ -61,7 +61,8 @@ xattr -dr com.apple.quarantine /Applications/Tandem.app
 - **Desktop app** (Electron + React, `apps/desktop`): sandboxed windows; the sign-in token is kept in the OS keychain.
 - **Server** (Fastify, `apps/server`): one shared service layer behind a REST API, a WebSocket for live updates (messages, presence, typing), and an MCP endpoint for agents. AI replies go through OpenRouter; the API key never leaves the server.
 - **Branches are a message tree.** Every message points to the one before it. An AI reply in a branch sees the path from the start of the session to that branch's latest message, never messages from sibling branches.
-- **Agents** connect with a token (`tdm_…`) from Settings. Their MCP tools let them wait for @mentions, read a branch's full context, show "working…", post replies, and share a branch to main.
+- **The project brief** is one shared document per session for specs, docs, and decisions. Every branch's AI reads the latest version, even branches created before an edit.
+- **Agents** connect with a token (`tdm_…`) from Settings. Their MCP tools let them wait for @mentions, read a branch's full context, show "working…", post replies, share a branch to main, and update the project brief.
 
 Details: [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -86,7 +87,7 @@ npm run dev                         # starts the server and opens the desktop ap
 
 The server creates and migrates its SQLite database on startup (`npm run db:migrate` does it by hand). Check it is up: `curl http://localhost:3000/api/health`.
 
-`npm run dev` uses the local server; installed builds use the hosted one. Change it any time in **Settings → Server URL**. Only one copy of the app runs per computer, so test multiplayer with a second computer pointed at the same server, or with the end-to-end script below.
+`npm run dev` uses the local server; installed builds use the hosted one. Change it any time in **Settings → Server URL**. Installed builds run one copy per computer. In dev, test multiplayer on one machine by running `npm run dev:second` alongside `npm run dev`: the second window has its own profile, token, and guest identity. You can also use a second computer pointed at the same server, or the end-to-end script below.
 
 ### Environment variables (server)
 
@@ -94,6 +95,7 @@ The server creates and migrates its SQLite database on startup (`npm run db:migr
 |---|---|
 | `DATABASE_URL` | SQLite file, e.g. `file:./tandem.db` |
 | `OPENROUTER_API_KEY` | OpenRouter key. Stays on the server and is never sent to clients. |
+| `OPENROUTER_ALLOW_PAID` | `true` to allow paid models. Otherwise only `:free` models are listed and called. Default `false`. |
 | `GITHUB_CLIENT_ID` | GitHub OAuth app client ID (optional) |
 | `GITHUB_CLIENT_SECRET` | GitHub OAuth app client secret (optional) |
 | `TOKEN_SECRET` | Secret used to hash access tokens. Required when `PUBLIC_URL` is not localhost. |
@@ -105,6 +107,7 @@ The server creates and migrates its SQLite database on startup (`npm run db:migr
 | Command | What it does |
 |---|---|
 | `npm run dev` | Server and desktop app in watch mode |
+| `npm run dev:second` | Second desktop window with its own profile, for multiplayer testing. Needs `npm run dev` running. |
 | `npm test` | Vitest across all workspaces |
 | `npm run typecheck` | `tsc` across all workspaces |
 | `npm run db:migrate` | Apply Drizzle migrations |
@@ -170,6 +173,7 @@ Base path `/api`. Authenticate with `Authorization: Bearer <token>`. Bodies are 
 | GET | `/api/sessions/:id` | Session details, members with online status, online count |
 | GET | `/api/sessions/join/:code` | Browser-friendly invite link — validates the code and returns an HTML page that auto-redirects to `tandem://join/<code>` with a paste-code fallback. No auth required. |
 | POST | `/api/sessions/join` | Join with `{ inviteCode }` |
+| PUT | `/api/sessions/:id/brief` | Any member replaces the project brief with `{ content, baseUpdatedAt }` (max 20,000 chars). `baseUpdatedAt` is the `briefUpdatedAt` the edit started from (`null` if never set); a mismatch returns `409 conflict`. Returns the session. |
 | GET | `/api/sessions/:id/agents` | Agent tokens owned by session members: `tokenId`, `label` (the @mention name), `ownerId`, `ownerName`, `active` (used in the last 5 min) |
 | GET | `/api/sessions/:id/branches` | All branches, with owner, model, fork point, and message count |
 | POST | `/api/sessions/:id/branches` | Create a branch from `{ fromMessageId, model, name? }`. `model` must be a `:free` id — returns `400` otherwise. |
