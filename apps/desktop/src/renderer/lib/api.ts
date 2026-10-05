@@ -21,17 +21,19 @@ async function getBase(): Promise<string> {
   return window.tandem.getServerUrl()
 }
 
-async function getHeaders(): Promise<HeadersInit> {
+// Content-Type only with a body: the server rejects an empty body labeled as JSON (e.g. a body-less
+// POST to /share or DELETE).
+async function getHeaders(hasBody: boolean): Promise<HeadersInit> {
   const token = await window.tandem.getToken()
   return {
-    'Content-Type': 'application/json',
+    ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   }
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const base = await getBase()
-  const headers = await getHeaders()
+  const headers = await getHeaders(init?.body != null)
   const res = await fetch(`${base}${path}`, { ...init, headers: { ...headers, ...(init?.headers ?? {}) } })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
@@ -40,9 +42,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json()
 }
 
+// For endpoints that answer 204 No Content.
 async function requestNoBody(path: string, init?: RequestInit): Promise<void> {
   const base = await getBase()
-  const headers = await getHeaders()
+  const headers = await getHeaders(init?.body != null)
   const res = await fetch(`${base}${path}`, { ...init, headers: { ...headers, ...(init?.headers ?? {}) } })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
@@ -98,10 +101,23 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ content, baseUpdatedAt }),
       }),
+    refreshBrief: (id: string) =>
+      request<import('@tandem/shared').Session>(`/api/sessions/${id}/brief/refresh`, { method: 'POST' }),
+    key: (id: string) =>
+      request<import('@tandem/shared').SessionKeyInfo>(`/api/sessions/${id}/key`),
+    setKey: (id: string, key: string) =>
+      request<import('@tandem/shared').SessionKeyInfo>(`/api/sessions/${id}/key`, {
+        method: 'PUT',
+        body: JSON.stringify({ key }),
+      }),
+    removeKey: (id: string) =>
+      request<import('@tandem/shared').SessionKeyInfo>(`/api/sessions/${id}/key`, { method: 'DELETE' }),
   },
 
   models: {
-    list: () => request<{ id: string; name: string }[]>('/api/models'),
+    // With a sessionId: the models that session can use (every model once it has its own key)
+    list: (sessionId?: string) =>
+      request<{ id: string; name: string }[]>(`/api/models${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''}`),
   },
 
   messages: {
@@ -120,11 +136,18 @@ export const api = {
         method: 'PATCH',
         body: JSON.stringify(data),
       }),
-    create: (sessionId: string, fromMessageId: string, model: string, name?: string, docIds?: string[]) =>
+    create: (sessionId: string, fromMessageId: string, model: string, name?: string, docIds?: string[], purpose?: string) =>
       request<import('@tandem/shared').Branch>(`/api/sessions/${sessionId}/branches`, {
         method: 'POST',
-        body: JSON.stringify({ fromMessageId, model, name, docIds }),
+        body: JSON.stringify({ fromMessageId, model, name, docIds, purpose }),
       }),
+    updateContext: (branchId: string, content: string, baseUpdatedAt: string | null) =>
+      request<import('@tandem/shared').Branch>(`/api/branches/${branchId}/context`, {
+        method: 'PUT',
+        body: JSON.stringify({ content, baseUpdatedAt }),
+      }),
+    regenerateContext: (branchId: string) =>
+      request<import('@tandem/shared').Branch>(`/api/branches/${branchId}/context/regenerate`, { method: 'POST' }),
     share: (branchId: string) =>
       request<import('@tandem/shared').Message>(`/api/branches/${branchId}/share`, {
         method: 'POST',
@@ -139,6 +162,11 @@ export const api = {
     upload: (sessionId: string, body: { title: string; text: string } | { title: string; pdfBase64: string }) =>
       request<import('@tandem/shared').ProjectDocMeta>(`/api/sessions/${sessionId}/docs`, {
         method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    update: (docId: string, body: { title?: string; content: string; baseUpdatedAt: string }) =>
+      request<import('@tandem/shared').ProjectDoc>(`/api/docs/${docId}`, {
+        method: 'PUT',
         body: JSON.stringify(body),
       }),
     delete: (docId: string) =>

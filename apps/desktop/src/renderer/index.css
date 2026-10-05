@@ -2,7 +2,65 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  @apply bg-gray-950 text-gray-100 antialiased;
-  font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+@layer base {
+  :root {
+    color-scheme: dark;
+    --color-canvas: 31 31 30;
+    --color-sidebar: 25 25 24;
+    --color-raised: 40 40 39;
+    --color-hover: 48 48 46;
+    --color-selected: 55 55 52;
+    --color-line: 57 57 54;
+    --color-control: 119 119 112;
+    --color-primary: 236 236 231;
+    --color-secondary: 180 180 172;
+    --color-muted: 153 153 145;
+    --color-action: 232 232 225;
+    --color-action-ink: 32 32 30;
+    --color-accent: 166 189 208;
+    --color-success: 163 186 161;
+    --color-warning: 215 189 141;
+    --color-danger: 227 160 154;
+    --font-ui: "Anthropic Sans", -apple-system, "Segoe UI", system-ui, sans-serif;
+    --font-prose: "Anthropic Serif", Georgia, "Times New Roman", serif;
+    --font-code: "Anthropic Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  }
+
+  html, body, #root { height: 100%; }
+  body { @apply m-0 overflow-hidden bg-canvas font-sans text-ui text-primary antialiased; }
+  button, input, textarea, select { font: inherit; }
+  button, a, input, textarea, select { -webkit-app-region: no-drag; }
+  button { @apply transition-colors duration-150; }
+  button:disabled { @apply cursor-not-allowed; }
+  :focus-visible { outline: 2px solid rgb(var(--color-accent)); outline-offset: 3px; }
+  input::placeholder, textarea::placeholder { @apply text-muted; }
+  input[type="checkbox"] { accent-color: rgb(var(--color-accent)); }
+  ::selection { background: rgb(var(--color-accent) / 0.25); }
+  * { scrollbar-width: thin; scrollbar-color: rgb(var(--color-selected)) transparent; }
+}
+
+@layer components {
+  .app-header {
+    @apply flex h-12 shrink-0 items-center gap-3 border-b border-line bg-sidebar pr-5;
+    padding-left: 96px;
+    -webkit-app-region: drag;
+  }
+  .section-label { @apply text-xs font-medium text-muted; }
+  .icon-button { @apply inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-secondary hover:bg-hover hover:text-primary; }
+  .button-primary { @apply inline-flex items-center justify-center gap-2 rounded-lg bg-action px-3 py-2 text-ui font-medium text-action-ink hover:bg-action/90 disabled:opacity-40; }
+  .button-secondary { @apply inline-flex items-center justify-center gap-2 rounded-lg border border-line bg-raised px-3 py-2 text-ui text-primary hover:bg-hover disabled:opacity-40; }
+  .field { @apply min-w-0 rounded-lg border border-control bg-raised px-3 py-2 text-ui text-primary outline-none focus:border-accent focus:ring-1 focus:ring-accent; }
+  .reading-column { @apply mx-auto w-full max-w-[760px] px-6; }
+  .composer { @apply relative flex items-center gap-3 rounded-xl border border-control bg-raised p-3 shadow-sm; }
+  .composer:focus-within { @apply border-accent; }
+  .message-prose { @apply font-prose text-prose; overflow-wrap: anywhere; }
+  .branch-action { @apply inline-flex items-center gap-1.5 rounded px-1.5 py-1 text-xs text-muted opacity-0 hover:bg-hover hover:text-primary focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
 }

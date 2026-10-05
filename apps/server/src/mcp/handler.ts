@@ -4,17 +4,33 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { z } from 'zod'
 import { resolveToken } from '../services/auth.js'
 import type { Actor } from '../services/auth.js'
-import { listSessions, getSession, getSessionBranches, updateBrief } from '../services/sessions.js'
-import { BRIEF_MAX_CHARS } from '@tandem/shared'
+import { listSessions, getSession, getSessionBranches, updateBrief, isSessionMember } from '../services/sessions.js'
+import { BRIEF_MAX_CHARS, DOC_MAX_CHARS, UploadDocSchema } from '@tandem/shared'
+import { refreshBrief } from '../services/brief.js'
 import { getBranchMessages, postMessage, shareBranch } from '../services/messages.js'
 import { createBranch } from '../services/branches.js'
 import { waitForMentions, getBranchContext, setWorking } from '../services/agents.js'
-import { listDocs, getDoc, searchDocs } from '../services/docs.js'
+import { listDocs, getDoc, searchDocs, uploadDoc, updateDoc } from '../services/docs.js'
+import { askParent } from '../services/askParent.js'
 import { eq } from 'drizzle-orm'
 import { getDb } from '../db/index.js'
 import { messages, users } from '../db/schema.js'
-import { fetchFreeModels } from '../ai/models.js'
-import { FreeModelIdSchema } from '@tandem/shared'
+import { listModels } from '../ai/models.js'
+import { hasSessionKey } from '../ai/keys.js'
+
+// Tool results are JSON text. A service failure is returned as { error: message } so the agent can
+// read it and react, instead of failing the tool call.
+function json(value: unknown) {
+  return { content: [{ type: 'text' as const, text: JSON.stringify(value) }] }
+}
+
+async function jsonOrError(run: () => unknown) {
+  try {
+    return json(await run())
+  } catch (err: unknown) {
+    return json({ error: err instanceof Error ? err.message : String(err) })
+  }
+}
 
 // Build a new McpServer per request with the actor closed over.
 // This is stateless mode — no session persistence across requests.
@@ -28,7 +44,7 @@ function buildMcpServer(actor: Actor) {
     {},
     async () => {
       const sess = await listSessions(actor.userId)
-      return { content: [{ type: 'text' as const, text: JSON.stringify(sess) }] }
+      return json(sess)
     },
   )
 
@@ -39,9 +55,9 @@ function buildMcpServer(actor: Actor) {
     { sessionId: z.string().describe('The session ID') },
     async ({ sessionId }) => {
       const data = await getSession(actor, sessionId)
-      if (!data) return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'not_found' }) }] }
+      if (!data) return json({ error: 'not_found' })
       const branchList = await getSessionBranches(actor, sessionId) ?? []
-      return { content: [{ type: 'text' as const, text: JSON.stringify({ ...data, branches: branchList }) }] }
+      return json({ ...data, branches: branchList })
     },
   )
 
@@ -55,7 +71,7 @@ function buildMcpServer(actor: Actor) {
     },
     async ({ branchId, limit }) => {
       const msgs = await getBranchMessages(actor, branchId)
-      if (!msgs) return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'not_found' }) }] }
+      if (!msgs) return json({ error: 'not_found' })
 
       const db = getDb()
       const userRows = db.select().from(users).all()
@@ -71,7 +87,7 @@ function buildMcpServer(actor: Actor) {
         status: m.status,
         createdAt: m.createdAt,
       }))
-      return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] }
+      return json(result)
     },
   )
 
@@ -85,12 +101,7 @@ function buildMcpServer(actor: Actor) {
       triggerAi: z.boolean().default(false).describe('Whether to trigger an AI reply'),
     },
     async ({ branchId, content, triggerAi }) => {
-      try {
-        const result = await postMessage(actor, branchId, content, triggerAi)
-        return { content: [{ type: 'text' as const, text: JSON.stringify(result.userMessage) }] }
-      } catch (err: unknown) {
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }] }
-      }
+      return jsonOrError(async () => (await postMessage(actor, branchId, content, triggerAi)).userMessage)
     },
   )
 
@@ -106,21 +117,37 @@ function buildMcpServer(actor: Actor) {
       const from = since ?? new Date().toISOString()
       const mentions = await waitForMentions(actor, from, timeoutSeconds * 1000)
       const cursor = mentions.length ? mentions[mentions.length - 1].createdAt : from
-      return { content: [{ type: 'text' as const, text: JSON.stringify({ mentions, cursor }) }] }
+      return json({ mentions, cursor })
     },
   )
 
   // ─── get_branch_context ───────────────────────────────────────────────────
   server.tool(
     'get_branch_context',
-    "Get everything you need before working on a branch: the session's project brief (specs, docs, decisions; always the latest version), the list of project docs (branch.pinnedDocIds marks the ones pinned to this branch; read them with read_project_doc), the branch's whole conversation from the session's start through the fork point (oldest first), who owns it and which branch it split from, and the session's other branches. Call this after being mentioned and before replying, so you are on the same page as the team.",
+    "Get everything you need before working on a branch: the brief (a summary of the main thread: direction, decisions, who is on what), the project docs this branch reads (specs such as ARCHITECTURE.md or TODO.md, in full; main reads every doc) plus a list of the others (read them with read_project_doc or search_project_docs), the branch's purpose and branch context (a cited summary of what it needs from the conversation it split off from), the last few messages before the fork and the branch's own messages (oldest first; main returns its whole conversation), who owns it and which branch it split from, and the session's other branches. Call this after being mentioned and before replying, so you are on the same page as the team. If something you need is missing, use ask_parent.",
     {
       branchId: z.string().describe('The branch ID'),
       limit: z.number().int().min(1).max(500).default(200).describe('Max messages to return (newest kept)'),
     },
     async ({ branchId, limit }) => {
       const context = await getBranchContext(actor, branchId, limit)
-      return { content: [{ type: 'text' as const, text: JSON.stringify(context ?? { error: 'not_found' }) }] }
+      return json(context ?? { error: 'not_found' })
+    },
+  )
+
+  // ─── ask_parent ───────────────────────────────────────────────────────────
+  server.tool(
+    'ask_parent',
+    "Ask the branch this branch split off from about something its context leaves out: a decision, a constraint, what someone said. The parent branch's AI answers from its full live history with sources in [brackets], and asks its own parent if it does not know, up to main. The question and answer are recorded in the branch so teammates see them. Use it instead of guessing about project decisions. Only works on branches owned by your token's user, and not on main.",
+    {
+      branchId: z.string().describe('The branch that is asking'),
+      question: z.string().min(1).max(2000).describe('One specific question'),
+    },
+    async ({ branchId, question }) => {
+      return jsonOrError(async () => {
+        const { answer, answeredBy } = await askParent(actor, branchId, question)
+        return { answer, answeredBy }
+      })
     },
   )
 
@@ -134,7 +161,7 @@ function buildMcpServer(actor: Actor) {
     },
     async ({ branchId, working }) => {
       const ok = setWorking(actor, branchId, working)
-      return { content: [{ type: 'text' as const, text: JSON.stringify(ok ? { ok: true } : { error: 'not_found' }) }] }
+      return json(ok ? { ok: true } : { error: 'not_found' })
     },
   )
 
@@ -144,58 +171,51 @@ function buildMcpServer(actor: Actor) {
     "Post an AI summary of a branch's work (everything since it split from main) into the main thread, so the whole team is on the same page. Use it when work on a branch reaches a result worth sharing. Only works on branches owned by your token's user.",
     { branchId: z.string().describe('The branch ID to summarize') },
     async ({ branchId }) => {
-      try {
-        return { content: [{ type: 'text' as const, text: JSON.stringify(await shareBranch(actor, branchId)) }] }
-      } catch (err: unknown) {
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }] }
-      }
+      return jsonOrError(() => shareBranch(actor, branchId))
     },
   )
 
   // ─── update_brief ─────────────────────────────────────────────────────────
   server.tool(
     'update_brief',
-    "Replace the session's shared project brief: the markdown document holding the team's specs, docs and decisions. Every branch's AI reads the latest brief, so use this when the team agrees on a spec or decision that every workstream should follow. Read it first with get_branch_context, edit the full text, and pass its briefUpdatedAt as baseUpdatedAt; if a teammate saved in between you get a conflict error, so read it again and reapply your change.",
+    "Replace the session's brief: the short markdown summary of the main thread (direction, decisions, who is on what) that every branch's AI reads. Use it to record a decision every workstream should know; put specs in a project doc instead (write_project_doc). Read it first with get_branch_context, edit the full text, and pass its briefUpdatedAt as baseUpdatedAt; if a teammate saved in between you get a conflict error, so read it again and reapply your change. To have AI rewrite it from main's latest messages, use refresh_brief.",
     {
       sessionId: z.string().describe('The session ID'),
       content: z.string().max(BRIEF_MAX_CHARS).describe('The full new brief, in markdown'),
       baseUpdatedAt: z.string().nullable().describe('briefUpdatedAt from get_branch_context (null if the brief was never set)'),
     },
     async ({ sessionId, content, baseUpdatedAt }) => {
-      try {
-        return { content: [{ type: 'text' as const, text: JSON.stringify(updateBrief(actor, sessionId, content, baseUpdatedAt)) }] }
-      } catch (err: unknown) {
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }] }
-      }
+      return jsonOrError(() => updateBrief(actor, sessionId, content, baseUpdatedAt))
+    },
+  )
+
+  // ─── refresh_brief ────────────────────────────────────────────────────────
+  server.tool(
+    'refresh_brief',
+    "Have AI rewrite the session's brief from the current brief and the main thread's latest messages. Use it after an important discussion in main, so every branch picks up the new direction. Returns the session with the new brief.",
+    { sessionId: z.string().describe('The session ID') },
+    async ({ sessionId }) => {
+      return jsonOrError(() => refreshBrief(actor, sessionId))
     },
   )
 
   // ─── Project docs ─────────────────────────────────────────────────────────
-  // Service errors come back as { error } text, like update_brief.
-  const docTool = (fn: () => unknown) => {
-    try {
-      return { content: [{ type: 'text' as const, text: JSON.stringify(fn()) }] }
-    } catch (err: unknown) {
-      return { content: [{ type: 'text' as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }] }
-    }
-  }
-
   server.tool(
     'list_project_docs',
-    "List the session's project docs: files the team uploaded to main with specs, docs and decisions. Returns id, title, kind and size, not content. Use it to see what reference material exists before reading or searching it.",
+    "List the session's project docs: specs, docs and decisions the team wrote or uploaded. Returns id, title, kind, size and updatedAt, not content. Use it to see what reference material exists before reading or searching it.",
     { sessionId: z.string().describe('The session ID') },
-    async ({ sessionId }) => docTool(() => listDocs(actor, sessionId)),
+    async ({ sessionId }) => jsonOrError(() => listDocs(actor, sessionId)),
   )
 
   server.tool(
     'read_project_doc',
-    'Read a project doc by id, in slices for long docs. Use it when list_project_docs or search_project_docs points to a doc you need in full. Returns title, the text from offset, and totalChars so you can read the next slice.',
+    'Read a project doc by id, in slices for long docs. Use it when list_project_docs or search_project_docs points to a doc you need in full. Returns title, the text from offset, totalChars so you can read the next slice, and updatedAt (pass it to write_project_doc when you edit).',
     {
       docId: z.string().describe('The doc ID'),
       offset: z.number().int().min(0).default(0).describe('Character offset to start from'),
       limit: z.number().int().min(1).max(20000).default(20000).describe('Max characters to return'),
     },
-    async ({ docId, offset, limit }) => docTool(() => {
+    async ({ docId, offset, limit }) => jsonOrError(() => {
       const { content, ...doc } = getDoc(actor, docId)
       return { ...doc, offset, text: content.slice(offset, offset + limit), totalChars: content.length }
     }),
@@ -209,48 +229,62 @@ function buildMcpServer(actor: Actor) {
       query: z.string().min(1).describe('Keywords for what you are looking for'),
       k: z.number().int().min(1).max(10).default(5).describe('Max passages to return'),
     },
-    async ({ sessionId, query, k }) => docTool(() => searchDocs(actor, sessionId, query, k)),
+    async ({ sessionId, query, k }) => jsonOrError(() => searchDocs(actor, sessionId, query, k)),
+  )
+
+  server.tool(
+    'write_project_doc',
+    "Create a project doc, or replace one's text, e.g. tick off items in TODO.md or record a spec change in ARCHITECTURE.md. Every branch that reads the doc sees the new version on its next reply. To create, omit docId. To edit, read it first and pass its updatedAt as baseUpdatedAt; if a teammate saved in between you get a conflict error, so read it again and reapply your change.",
+    {
+      sessionId: z.string().describe('The session ID'),
+      docId: z.string().optional().describe('The doc to replace; omit to create a new doc'),
+      title: UploadDocSchema.options[0].shape.title.optional().describe('Doc title, e.g. TODO.md; required to create'),
+      content: z.string().min(1).max(DOC_MAX_CHARS).describe('The full new text, in markdown'),
+      baseUpdatedAt: z.string().optional().describe('updatedAt of the version you edited; required to edit'),
+    },
+    async ({ sessionId, docId, title, content, baseUpdatedAt }) => jsonOrError(() => {
+      if (!docId) {
+        if (!title) return { error: 'title is required to create a doc' }
+        return uploadDoc(actor, sessionId, { title, text: content })
+      }
+      if (!baseUpdatedAt) return { error: 'baseUpdatedAt is required to edit a doc; read it first' }
+      const { content: text, ...doc } = updateDoc(actor, docId, { title, content, baseUpdatedAt })
+      return { ...doc, chars: text.length }
+    }),
   )
 
   // ─── create_branch ────────────────────────────────────────────────────────
   server.tool(
     'create_branch',
-    'Create a new branch from a specific message.',
+    "Create a new branch from a specific message. The branch does not inherit the parent's whole conversation: AI writes it a cited branch context for its purpose, plus it keeps the last few messages before the fork. The branch's AI reads its pinned project docs in full and gets excerpts of the rest. A paid model works only when the session has its own OpenRouter key.",
     {
       fromMessageId: z.string().describe('The message ID to branch from'),
-      // FreeModelIdSchema ensures only :free model IDs are accepted
-      model: FreeModelIdSchema.describe('OpenRouter :free model ID for this branch'),
+      model: z.string().min(1).describe('OpenRouter model ID from list_models'),
       name: z.string().optional().describe('Optional branch name'),
-      docIds: z.array(z.string()).max(100).optional().describe('Project doc IDs (from list_project_docs) to pin; the branch AI reads pinned docs in full'),
+      purpose: z.string().max(500).optional().describe('What the branch is for, e.g. "Frontend: settings page". Its context is written for this.'),
+      docIds: z.array(z.string()).max(100).optional().describe('Project doc IDs (from list_project_docs) to pin; the branch AI reads pinned docs in full. Omit to copy the parent branch\'s pins (every doc when branching from main).'),
     },
-    async ({ fromMessageId, model, name, docIds }) => {
-      // No manual isFreeModelId check needed — FreeModelIdSchema handles it above
+    async ({ fromMessageId, model, name, purpose, docIds }) => {
       const db = getDb()
       const msg = db.select().from(messages).where(eq(messages.id, fromMessageId)).get()
-      if (!msg) return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'message_not_found' }) }] }
-      let branch
-      try {
-        branch = await createBranch(actor, msg.sessionId, fromMessageId, model, name, docIds)
-      } catch (err: unknown) {
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }] }
-      }
-      if (!branch) return { content: [{ type: 'text' as const, text: JSON.stringify({ error: 'not_found' }) }] }
-      return { content: [{ type: 'text' as const, text: JSON.stringify(branch) }] }
+      if (!msg) return json({ error: 'message_not_found' })
+      return jsonOrError(async () => {
+        const branch = await createBranch(actor, msg.sessionId, fromMessageId, model, name, docIds, purpose?.trim() || undefined)
+        return branch ?? { error: 'not_found' }
+      })
     },
   )
 
   // ─── list_models ──────────────────────────────────────────────────────────
   server.tool(
     'list_models',
-    'List free AI models that can be used when creating branches or sessions.',
-    {},
-    async () => {
-      return {
-        content: [{
-          type: 'text' as const,
-          text: JSON.stringify(await fetchFreeModels()),
-        }],
-      }
+    "List the AI models a session can use: free models, or every model when the session has its own OpenRouter key. Omit sessionId for the free list (what a new session can use).",
+    { sessionId: z.string().optional().describe('The session the model is for') },
+    async ({ sessionId }) => {
+      return jsonOrError(async () => {
+        const byok = Boolean(sessionId && isSessionMember(sessionId, actor.userId) && hasSessionKey(sessionId))
+        return listModels(byok)
+      })
     },
   )
 

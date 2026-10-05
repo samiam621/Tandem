@@ -44,7 +44,20 @@ export const branches = sqliteTable('branches', {
   forkMessageId: text('fork_message_id'),
   headMessageId: text('head_message_id'),
   createdAt: text('created_at').notNull(),
-  pinnedDocIds: text('pinned_doc_ids', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  pinnedDocIds: text('pinned_doc_ids', { mode: 'json' }).$type<string[]>().notNull().default([]), // unused on main
+  purpose: text('purpose'), // null on main
+  branchContext: text('branch_context'), // cited summary from the parent branch; null on main or until written
+  branchContextUpdatedAt: text('branch_context_updated_at'),
+  branchContextUpdatedBy: text('branch_context_updated_by'), // a user id, or AI_AUTHOR
+})
+
+// A session's own OpenRouter key (BYOK), encrypted at rest. Read and decrypted only in src/ai/.
+export const sessionKeys = sqliteTable('session_keys', {
+  sessionId: text('session_id').primaryKey(),
+  keyCiphertext: text('key_ciphertext').notNull(),
+  keyLast4: text('key_last4').notNull(),
+  setBy: text('set_by').notNull(),
+  setAt: text('set_at').notNull(),
 })
 
 export const messages = sqliteTable('messages', {
@@ -56,21 +69,27 @@ export const messages = sqliteTable('messages', {
   authorId: text('author_id').notNull(),
   agentLabel: text('agent_label'), // agent token label at post time, e.g. "Claude"
   sharedFromBranchId: text('shared_from_branch_id'), // set on a Share to main summary
+  kind: text('kind', { enum: ['text', 'ask_parent'] }).notNull().default('text'),
+  askQuestion: text('ask_question'), // ask_parent: the question (content holds the answer)
+  askedBranchId: text('asked_branch_id'), // ask_parent: the branch that answered
   model: text('model'),
   content: text('content').notNull().default(''),
   status: text('status', { enum: ['pending', 'streaming', 'done', 'error'] }).notNull().default('pending'),
   createdAt: text('created_at').notNull(),
 })
 
-// Files uploaded to a session's project docs; content is the text (extracted, for a PDF).
+// A session's project docs, written in the app or uploaded; content is the text (extracted, for a PDF).
 export const projectDocs = sqliteTable('project_docs', {
   id: text('id').primaryKey(),
   sessionId: text('session_id').notNull(),
   title: text('title').notNull(),
   kind: text('kind', { enum: ['text', 'pdf'] }).notNull(),
   content: text('content').notNull(),
-  uploadedBy: text('uploaded_by').notNull(),
+  uploadedBy: text('uploaded_by').notNull(), // the creator
   createdAt: text('created_at').notNull(),
+  // The defaults only cover rows from before editing existed; the migration backfills them.
+  updatedAt: text('updated_at').notNull().default(''), // doubles as the version for optimistic saves
+  updatedBy: text('updated_by').notNull().default(''),
 })
 
 // Agent tokens mentioned as @label in a message (agents are MCP tokens for now).

@@ -4,6 +4,8 @@ import { getDb } from '../db/index.js'
 import { sessions, sessionMembers, branches, users, apiTokens } from '../db/schema.js'
 import { bus } from '../events.js'
 import { rowToBranch } from './branches.js'
+import { fail } from './errors.js'
+import { assertModelForSession } from '../ai/models.js'
 import type { Session, Branch, User, SessionAgent } from '@tandem/shared'
 
 function now() { return new Date().toISOString() }
@@ -39,6 +41,7 @@ export async function createSession(
   title: string,
   defaultModel: string,
 ): Promise<{ session: Session; mainBranch: Branch; inviteCode: string }> {
+  assertModelForSession(null, defaultModel) // a new session has no key of its own, so free only
   const db = getDb()
   const sessionId = nanoid()
   const branchId = nanoid()
@@ -217,8 +220,9 @@ export async function listSessionAgents(
 }
 
 // ─── Project brief ────────────────────────────────────────────────────────────
-// Any member may edit. baseUpdatedAt must match the stored briefUpdatedAt so a save never
-// silently overwrites a teammate's newer version.
+// A short summary of main. Any member may edit; refreshBrief (services/brief.ts) rewrites it with AI.
+// baseUpdatedAt must match the stored briefUpdatedAt so a save never silently overwrites a
+// teammate's newer version.
 
 export function updateBrief(
   actor: { userId: string },
@@ -226,29 +230,30 @@ export function updateBrief(
   content: string,
   baseUpdatedAt: string | null,
 ): Session {
+  if (!isSessionMember(sessionId, actor.userId)) fail(404, 'not_found', 'Session not found')
+  return writeBrief(sessionId, content, baseUpdatedAt, actor.userId)
+}
+
+// updatedBy is a user id, or BRIEF_AUTO_REFRESH_AUTHOR for an automatic refresh.
+export function writeBrief(sessionId: string, content: string, baseUpdatedAt: string | null, updatedBy: string): Session {
   const db = getDb()
-  if (!isSessionMember(sessionId, actor.userId)) {
-    throw Object.assign(new Error('Session not found'), { code: 'not_found', status: 404 })
-  }
   // briefUpdatedAt doubles as the version, so it must strictly increase even for saves in the same millisecond.
   const ts = baseUpdatedAt && Date.parse(now()) <= Date.parse(baseUpdatedAt)
     ? new Date(Date.parse(baseUpdatedAt) + 1).toISOString()
     : now()
   const res = db.update(sessions)
-    .set({ brief: content, briefUpdatedAt: ts, briefUpdatedBy: actor.userId })
+    .set({ brief: content, briefUpdatedAt: ts, briefUpdatedBy: updatedBy })
     .where(and(
       eq(sessions.id, sessionId),
       baseUpdatedAt === null ? isNull(sessions.briefUpdatedAt) : eq(sessions.briefUpdatedAt, baseUpdatedAt),
     ))
     .run()
-  if (res.changes === 0) {
-    throw Object.assign(new Error('Someone updated the brief since you started editing'), { code: 'conflict', status: 409 })
-  }
+  if (res.changes === 0) fail(409, 'conflict', 'Someone updated the brief since you started editing')
 
   const session = rowToSession(db.select().from(sessions).where(eq(sessions.id, sessionId)).get()!)
   bus.emitSession(sessionId, {
     type: 'brief_updated',
-    payload: { sessionId, brief: session.brief, briefUpdatedAt: ts, briefUpdatedBy: actor.userId },
+    payload: { sessionId, brief: session.brief, briefUpdatedAt: ts, briefUpdatedBy: updatedBy },
   })
   return session
 }

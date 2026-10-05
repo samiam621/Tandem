@@ -162,7 +162,7 @@ export function MessageTreePanel({ branches, allMessages, activeBranchId, shared
 
   if (branches.length === 0) {
     return (
-      <div className="flex items-center justify-center h-full text-xs text-gray-600">
+      <div className="flex items-center justify-center h-full text-xs text-muted">
         No branches
       </div>
     )
@@ -170,7 +170,7 @@ export function MessageTreePanel({ branches, allMessages, activeBranchId, shared
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide px-3 py-2 shrink-0 border-b border-gray-800">
+      <p className="text-xs font-medium text-muted px-4 py-4 shrink-0 border-b border-line">
         Tree
       </p>
       <div className="flex-1 overflow-auto">
@@ -193,7 +193,7 @@ export function MessageTreePanel({ branches, allMessages, activeBranchId, shared
                 y1={parent.y}
                 x2={node.x}
                 y2={node.y}
-                stroke={isActive ? '#3b82f6' : '#374151'}
+                stroke={isActive ? 'rgb(var(--color-accent))' : 'rgb(var(--color-line))'}
                 strokeWidth={isActive ? 1.5 : 1}
               />
             )
@@ -204,15 +204,23 @@ export function MessageTreePanel({ branches, allMessages, activeBranchId, shared
             const isActive = node.branchId === activeBranchId
             const isShared = sharedBranchIds.has(node.branchId)
             const circleColor = isActive
-              ? '#3b82f6'
+              ? 'rgb(var(--color-accent))'
               : node.isForkPoint
-              ? '#7c5cd8'
-              : '#4b5563'
-            const textColor = isActive ? '#fff' : '#9ca3af'
+              ? 'rgb(var(--color-secondary))'
+              : 'rgb(var(--color-control))'
+            const textColor = isActive ? 'rgb(var(--color-primary))' : 'rgb(var(--color-muted))'
 
             return (
               <g
                 key={node.id}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    onSelectBranch(node.branchId)
+                  }
+                }}
                 onClick={() => onSelectBranch(node.branchId)}
                 style={{ cursor: 'pointer' }}
                 aria-label={`${node.branchName}: ${node.label}`}
@@ -226,7 +234,7 @@ export function MessageTreePanel({ branches, allMessages, activeBranchId, shared
                 <text
                   x={node.x + R + 4}
                   y={node.y + 4}
-                  fontSize={9}
+                  fontSize={11}
                   fill={textColor}
                   style={{ userSelect: 'none' }}
                 >
@@ -238,7 +246,7 @@ export function MessageTreePanel({ branches, allMessages, activeBranchId, shared
                     cx={node.x + R - 1}
                     cy={node.y - R + 1}
                     r={2.5}
-                    fill="#60a5fa"
+                    fill="rgb(var(--color-accent))"
                     aria-label="shared to main"
                   />
                 )}

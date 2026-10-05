@@ -1,8 +1,11 @@
 import { nanoid } from 'nanoid'
-import { eq, and, inArray } from 'drizzle-orm'
+import { eq, and } from 'drizzle-orm'
 import { getDb } from '../db/index.js'
-import { branches, sessionMembers, messages, projectDocs } from '../db/schema.js'
+import { branches, sessionMembers, messages } from '../db/schema.js'
 import { bus } from '../events.js'
+import { checkDocIds, sessionDocs } from './docs.js'
+import { assertModelForSession } from '../ai/models.js'
+import { startBranchContext } from './branchContext.js'
 import type { Branch } from '@tandem/shared'
 
 function now() { return new Date().toISOString() }
@@ -19,19 +22,11 @@ export function rowToBranch(row: typeof branches.$inferSelect): Branch {
     headMessageId: row.headMessageId ?? null,
     createdAt: row.createdAt,
     pinnedDocIds: row.pinnedDocIds,
+    purpose: row.purpose ?? null,
+    branchContext: row.branchContext ?? null,
+    branchContextUpdatedAt: row.branchContextUpdatedAt ?? null,
+    branchContextUpdatedBy: row.branchContextUpdatedBy ?? null,
   }
-}
-
-// Throws 400 unless every id is a project doc in this session. Returns the ids without duplicates.
-function checkDocIds(sessionId: string, docIds: string[]): string[] {
-  const ids = [...new Set(docIds)]
-  if (!ids.length) return ids
-  const found = getDb().select({ id: projectDocs.id }).from(projectDocs)
-    .where(and(eq(projectDocs.sessionId, sessionId), inArray(projectDocs.id, ids))).all()
-  if (found.length !== ids.length) {
-    throw Object.assign(new Error('Unknown project doc for this session'), { code: 'invalid_request', status: 400 })
-  }
-  return ids
 }
 
 export async function createBranch(
@@ -40,7 +35,8 @@ export async function createBranch(
   fromMessageId: string,
   model: string,
   name?: string,
-  docIds: string[] = [],
+  docIds?: string[],
+  purpose?: string,
 ): Promise<Branch | null> {
   const db = getDb()
 
@@ -56,7 +52,16 @@ export async function createBranch(
     .get()
   if (!forkMsg) return null
 
-  const pinnedDocIds = checkDocIds(sessionId, docIds)
+  assertModelForSession(sessionId, model)
+  // Without an explicit choice, a branch pins what its parent branch (the one holding the fork
+  // message) reads; forking from main means every doc.
+  const parent = db.select().from(branches).where(eq(branches.id, forkMsg.branchId)).get()
+  const pinnedDocIds = docIds
+    ? checkDocIds(sessionId, docIds)
+    : parent && !parent.isMain
+      ? parent.pinnedDocIds
+      : sessionDocs(sessionId).map((d) => d.id)
+
   const branchId = nanoid()
   const ts = now()
   const branchName = name ?? `Branch ${ts.slice(11, 19)}`
@@ -72,11 +77,14 @@ export async function createBranch(
     headMessageId: fromMessageId, // starts at the fork point
     createdAt: ts,
     pinnedDocIds,
+    purpose: purpose ?? null,
   }).run()
 
   const branch = rowToBranch(db.select().from(branches).where(eq(branches.id, branchId)).get()!)
 
   bus.emitSession(sessionId, { type: 'branch_created', payload: branch })
+  // Its AI does not inherit the parent's raw history; AI writes a cited branch context instead.
+  startBranchContext(branch)
 
   return branch
 }
@@ -96,7 +104,10 @@ export function updateBranch(
 
   const updates: Partial<typeof branches.$inferInsert> = {}
   if (changes.name) updates.name = changes.name
-  if (changes.model) updates.model = changes.model
+  if (changes.model) {
+    assertModelForSession(branch.sessionId, changes.model)
+    updates.model = changes.model
+  }
   if (changes.pinnedDocIds) updates.pinnedDocIds = checkDocIds(branch.sessionId, changes.pinnedDocIds)
   if (Object.keys(updates).length) db.update(branches).set(updates).where(eq(branches.id, branchId)).run()
 

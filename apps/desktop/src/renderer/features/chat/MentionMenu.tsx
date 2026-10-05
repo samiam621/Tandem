@@ -76,25 +76,25 @@ export function MentionMenu({
 
   return (
     <div
-      className="absolute bottom-full mb-1 left-0 z-50 w-64 rounded-xl border border-gray-700 bg-gray-900 shadow-xl overflow-hidden"
+      className="absolute bottom-full mb-1 left-0 z-50 w-64 rounded-xl border border-line bg-sidebar shadow-xl overflow-hidden"
       onMouseDown={(e) => e.preventDefault()} // prevent input blur
     >
-      <ul ref={listRef} className="max-h-48 overflow-y-auto py-1" role="listbox">
+      <ul id="mention-list" ref={listRef} className="max-h-48 overflow-y-auto py-1" role="listbox">
         {filtered.map((item, i) => (
           <li
             key={item.label}
-            role="option"
+            id={`mention-${i}`} role="option"
             aria-selected={i === activeIndex}
             onMouseEnter={() => onActiveIndexChange(i)}
             onClick={() => onSelect(item.label)}
             className={`flex items-center gap-2 px-3 py-1.5 cursor-pointer select-none ${
-              i === activeIndex ? 'bg-gray-700' : 'hover:bg-gray-800'
+              i === activeIndex ? 'bg-selected' : 'hover:bg-hover'
             }`}
           >
             {/* Avatar / icon */}
             <span
-              className={`h-5 w-5 shrink-0 rounded-full flex items-center justify-center text-[10px] font-bold ${
-                item.isAgent ? 'bg-teal-800 text-teal-200' : 'bg-gray-600 text-gray-200'
+              className={`h-5 w-5 shrink-0 rounded-full flex items-center justify-center text-xs font-semibold ${
+                item.isAgent ? 'bg-selected text-secondary' : 'bg-hover text-primary'
               }`}
             >
               {item.isAgent ? '⚙' : item.label[0]?.toUpperCase() ?? '?'}
@@ -102,13 +102,13 @@ export function MentionMenu({
 
             {/* Label + sublabel */}
             <span className="flex-1 min-w-0">
-              <span className="text-sm text-white">{item.label}</span>
-              <span className="ml-1.5 text-xs text-gray-500">{item.sublabel}</span>
+              <span className="text-sm text-primary">{item.label}</span>
+              <span className="ml-1.5 text-xs text-muted">{item.sublabel}</span>
             </span>
 
             {/* Active dot for agents */}
             {item.isAgent && item.isActive && (
-              <span className="h-1.5 w-1.5 rounded-full bg-green-400 shrink-0" title="recently active" />
+              <span className="h-1.5 w-1.5 rounded-full bg-success shrink-0" title="recently active" />
             )}
           </li>
         ))}
@@ -132,7 +132,7 @@ export function highlightMentions(text: string, knownLabels: Set<string>): React
       const candidate = part.slice(1)
       if (knownLabels.has(candidate.toLowerCase())) {
         return (
-          <span key={i} className="text-teal-400 font-medium">
+          <span key={i} className="text-accent font-medium">
             {part}
           </span>
         )

@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify'
-import { UploadDocSchema } from '@tandem/shared'
+import { UploadDocSchema, UpdateDocSchema } from '@tandem/shared'
 import { requireAuth } from '../middleware/auth.js'
-import { listDocs, getDoc, uploadDoc, deleteDoc } from '../services/docs.js'
+import { listDocs, getDoc, uploadDoc, updateDoc, deleteDoc } from '../services/docs.js'
 
 type Handler = () => unknown
 
@@ -36,6 +36,16 @@ export const docRoutes: FastifyPluginAsync = async (app) => {
   app.get('/api/docs/:id', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string }
     return run(reply, 200, () => getDoc(req.actor!, id))
+  })
+
+  // PUT /api/docs/:id — any member; 409 when someone saved since baseUpdatedAt
+  app.put('/api/docs/:id', { preHandler: requireAuth }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const body = UpdateDocSchema.safeParse(req.body)
+    if (!body.success) {
+      return reply.code(400).send({ error: { code: 'invalid_request', message: body.error.message } })
+    }
+    return run(reply, 200, () => updateDoc(req.actor!, id, body.data))
   })
 
   // DELETE /api/docs/:id

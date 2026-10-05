@@ -7,11 +7,12 @@ import { checkRateLimit } from '../lib/rateLimit.js'
 import { findMentionedLabels } from '../lib/mentions.js'
 import { sessionAgentTokens } from './sessions.js'
 import { summarize } from '../ai/openrouter.js'
+import { fail } from './errors.js'
 import type { Message } from '@tandem/shared'
 
 function now() { return new Date().toISOString() }
 
-function rowToMessage(row: typeof messages.$inferSelect): Message {
+export function rowToMessage(row: typeof messages.$inferSelect): Message {
   return {
     id: row.id,
     sessionId: row.sessionId,
@@ -21,6 +22,9 @@ function rowToMessage(row: typeof messages.$inferSelect): Message {
     authorId: row.authorId,
     agentLabel: row.agentLabel ?? null,
     sharedFromBranchId: row.sharedFromBranchId ?? null,
+    kind: row.kind,
+    askQuestion: row.askQuestion ?? null,
+    askedBranchId: row.askedBranchId ?? null,
     model: row.model ?? null,
     content: row.content,
     status: row.status,
@@ -77,21 +81,17 @@ export async function postMessage(
   const db = getDb()
 
   const branch = db.select().from(branches).where(eq(branches.id, branchId)).get()
-  if (!branch) throw Object.assign(new Error('Branch not found'), { code: 'not_found', status: 404 })
+  if (!branch) fail(404, 'not_found', 'Branch not found')
 
   // Permission: main branch → any member; other branches → owner only
   const membership = db.select().from(sessionMembers)
     .where(and(eq(sessionMembers.sessionId, branch.sessionId), eq(sessionMembers.userId, actor.userId)))
     .get()
-  if (!membership) throw Object.assign(new Error('Not a member'), { code: 'forbidden', status: 403 })
+  if (!membership) fail(403, 'forbidden', 'Not a member')
 
-  if (!branch.isMain && branch.ownerId !== actor.userId) {
-    throw Object.assign(new Error('Only the branch owner can post here'), { code: 'forbidden', status: 403 })
-  }
+  if (!branch.isMain && branch.ownerId !== actor.userId) fail(403, 'forbidden', 'Only the branch owner can post here')
 
-  if (!checkRateLimit(actor.userId)) {
-    throw Object.assign(new Error('Rate limit exceeded (100 messages/hour)'), { code: 'rate_limited', status: 429 })
-  }
+  if (!checkRateLimit(actor.userId)) fail(429, 'rate_limited', 'Rate limit exceeded (100 messages/hour)')
 
   const authorType = actor.tokenKind === 'agent' ? 'agent' : 'user'
   const msgId = nanoid()
@@ -169,10 +169,6 @@ export async function postMessage(
 const SHARE_MAX_MESSAGES = 100
 const SHARE_MAX_CHARS = 20_000
 
-function fail(status: number, code: string, message: string): never {
-  throw Object.assign(new Error(message), { code, status })
-}
-
 export async function shareBranch(actor: { userId: string }, branchId: string): Promise<Message> {
   const db = getDb()
   const branch = db.select().from(branches).where(eq(branches.id, branchId)).get()
@@ -188,11 +184,13 @@ export async function shareBranch(actor: { userId: string }, branchId: string): 
   const authorIds = [...new Set(own.map((m) => m.authorId))]
   const nameById = new Map(db.select().from(users).where(inArray(users.id, authorIds)).all().map((u) => [u.id, u.displayName]))
   const transcript = own
-    .map((m) => `${m.authorType === 'assistant' ? 'AI' : m.agentLabel ?? nameById.get(m.authorId) ?? 'someone'}: ${m.content}`)
+    .map((m) => m.kind === 'ask_parent'
+      ? `(asked the parent branch "${m.askQuestion}": ${m.content})`
+      : `${m.authorType === 'assistant' ? 'AI' : m.agentLabel ?? nameById.get(m.authorId) ?? 'someone'}: ${m.content}`)
     .join('\n')
     .slice(-SHARE_MAX_CHARS)
 
-  const summary = await summarize(branch.model, transcript)
+  const summary = await summarize(branch.sessionId, branch.model, transcript)
   const mainId = db.select().from(branches).where(and(eq(branches.sessionId, branch.sessionId), eq(branches.isMain, true))).get()!.id
 
   const msgId = nanoid()

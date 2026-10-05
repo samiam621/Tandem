@@ -10,15 +10,19 @@ import { branchRoutes } from './routes/branches.js'
 import { messageRoutes } from './routes/messages.js'
 import { docRoutes } from './routes/docs.js'
 import { recoverStaleMessages } from './services/messages.js'
+import { backfillBranchContexts } from './services/branchContext.js'
 import { wsHandler } from './ws/handler.js'
 import { tokenRoutes } from './routes/tokens.js'
 import { mcpHandler } from './mcp/handler.js'
 
-// A deployed server (non-localhost PUBLIC_URL) must not hash tokens with the known dev secret.
+// A deployed server (non-localhost PUBLIC_URL) must not hash tokens or encrypt session keys with the known dev secrets.
 const publicUrl = process.env.PUBLIC_URL ?? ''
-if (!process.env.TOKEN_SECRET && publicUrl && !/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(publicUrl)) {
-  console.error(`TOKEN_SECRET must be set when PUBLIC_URL is ${publicUrl}`)
-  process.exit(1)
+const deployed = publicUrl && !/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(publicUrl)
+for (const name of ['TOKEN_SECRET', 'KEY_ENCRYPTION_SECRET']) {
+  if (deployed && !process.env[name]) {
+    console.error(`${name} must be set when PUBLIC_URL is ${publicUrl}`)
+    process.exit(1)
+  }
 }
 
 const server = Fastify({ logger: true })
@@ -50,6 +54,9 @@ await import('./db/migrate.js').catch((err) => {
 
 // Recover stale messages from a previous crash
 recoverStaleMessages()
+
+// Write a branch context for branches that have none (created before scoped context, or a failed write)
+void backfillBranchContexts().catch((err) => server.log.error(err, 'Branch context backfill failed'))
 
 const port = Number(process.env.PORT ?? 3000)
 const host = process.env.HOST ?? '0.0.0.0'

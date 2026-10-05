@@ -9,16 +9,33 @@ export const MULTIPLAYER_PROMPT = `You are the AI assistant in a shared team cha
 Each non-assistant message starts with the speaker's name, as "Name: message". Use names to tell speakers apart and address people by name when useful.
 Do not start your own replies with a name prefix.`
 
-export const BRIEF_HEADER = 'Project brief (shared by every branch; the current source of truth for specs and decisions):'
-export const PINNED_HEADER = 'Project docs pinned to this branch:'
+export const BRIEF_HEADER = 'Brief: the current summary of the main thread, where the team plans (direction, decisions, who is on what):'
+export const PINNED_HEADER = 'Project docs this branch reads:'
+export const INDEX_HEADER = 'Project docs index:'
 export const EXCERPTS_HEADER = 'Excerpts from project docs not pinned to this branch, matched to the latest message:'
+export const BRANCH_CONTEXT_HEADER = 'Branch context: this branch split off from a parent conversation you do not see in full. This is what the branch needs from it; sources are in [brackets].'
+export const ASK_PARENT_HINT = 'If you need something from the parent conversation that is not here, call the ask_parent tool instead of guessing.'
+export const FORK_TAIL_HEADER = 'The last messages before this branch split off, verbatim:'
+
+// The fork tail: the last few finished messages up to the fork point, kept word for word so the
+// message a branch split from still reads in context (a summary loses the exact wording).
+export const FORK_TAIL_MESSAGES = 6
+export const FORK_TAIL_MAX_CHARS = 16_000
 
 type Doc = { id: string; title: string; content: string }
-export type BranchDocs = { pinned: Doc[]; others: Doc[] }
+export type BranchDocs = { pinned: Doc[]; others: Doc[] } // read in full; excerpted
 
-// Pinned docs in full up to PINNED_DOCS_MAX_CHARS, an index of every doc, then the unpinned
-// passages that best match the latest message. Docs, like the brief, are read live.
-function docMessages({ pinned, others }: BranchDocs, query: string): ChatMsg[] {
+export interface SharedContext {
+  brief?: string
+  docs?: BranchDocs // read live, like the brief
+  branchContext?: string | null // every branch except main
+  purpose?: string | null
+  canAskParent?: boolean // the model is offered the ask_parent tool
+}
+
+// Pinned docs in full up to PINNED_DOCS_MAX_CHARS, then an index of every doc. Excerpts of the
+// unpinned docs come separately (docExcerpts), since they change with every message.
+function docMessages({ pinned, others }: BranchDocs): ChatMsg[] {
   if (!pinned.length && !others.length) return []
   const out: ChatMsg[] = []
   if (pinned.length) {
@@ -29,16 +46,19 @@ function docMessages({ pinned, others }: BranchDocs, query: string): ChatMsg[] {
     out.push({ role: 'system', content: `${PINNED_HEADER}\n\n${body}` })
   }
   const index = [...pinned.map((d) => `- ${d.title} (pinned)`), ...others.map((d) => `- ${d.title}`)].join('\n')
-  out.push({ role: 'system', content: `Project docs index:\n${index}` })
-  const excerpts = searchDocs(others, query, DOC_EXCERPTS_K)
-  if (excerpts.length) {
-    out.push({ role: 'system', content: `${EXCERPTS_HEADER}\n\n${excerpts.map((e) => `[${e.title}]\n${e.text}`).join('\n\n')}` })
-  }
+  out.push({ role: 'system', content: `${INDEX_HEADER}\n${index}` })
   return out
 }
 
+// The unpinned passages that best match the latest message.
+function docExcerpts(others: Doc[], query: string): ChatMsg[] {
+  const excerpts = searchDocs(others, query, DOC_EXCERPTS_K)
+  if (!excerpts.length) return []
+  return [{ role: 'system', content: `${EXCERPTS_HEADER}\n\n${excerpts.map((e) => `[${e.title}]\n${e.text}`).join('\n\n')}` }]
+}
+
 // Walks parent_id links from headMessageId up to the root and returns the path oldest first.
-// This is what scopes a branch to its fork history plus its own messages: siblings are never reached.
+// Siblings are never reached.
 export function pathToHead(rows: MessageRow[], headMessageId: string): MessageRow[] {
   const byId = new Map(rows.map((m) => [m.id, m]))
   const path: MessageRow[] = []
@@ -50,27 +70,73 @@ export function pathToHead(rows: MessageRow[], headMessageId: string): MessageRo
   return path.reverse()
 }
 
-// Maps the path to the pending assistant message into chat messages. The pending message itself and
-// any pending/error messages are skipped. User and agent messages are prefixed with the speaker's name
-// (an agent's token label wins over its user's display name). The session brief is passed in live,
-// not taken from the path, so a branch forked before a brief edit still sees the latest version.
+// The newest finished messages of `path`, at most FORK_TAIL_MESSAGES and FORK_TAIL_MAX_CHARS
+// (the newest one is always kept).
+export function forkTail(path: MessageRow[]): MessageRow[] {
+  const done = path.filter((m) => m.status === 'done')
+  const tail: MessageRow[] = []
+  let chars = 0
+  for (let i = done.length - 1; i >= 0 && tail.length < FORK_TAIL_MESSAGES; i--) {
+    chars += done[i].content.length + (done[i].askQuestion?.length ?? 0)
+    if (tail.length && chars > FORK_TAIL_MAX_CHARS) break
+    tail.unshift(done[i])
+  }
+  return tail
+}
+
+// A branch's history as its AI sees it. Main (no forkMessageId): the whole path. Any other branch:
+// the fork tail, then the branch's own messages. Its parent's earlier messages are left out; the
+// branch context stands in for them.
+export function branchHistory(rows: MessageRow[], headMessageId: string, forkMessageId: string | null): { tail: MessageRow[]; own: MessageRow[] } {
+  const path = pathToHead(rows, headMessageId)
+  if (!forkMessageId) return { tail: [], own: path }
+  const fork = path.findIndex((m) => m.id === forkMessageId)
+  return { tail: forkTail(path.slice(0, fork + 1)), own: path.slice(fork + 1) }
+}
+
+export function speakerName(m: MessageRow, nameById: Map<string, string>): string {
+  return m.agentLabel ?? nameById.get(m.authorId) ?? 'Unknown'
+}
+
+function toChatMsg(m: MessageRow, nameById: Map<string, string>): ChatMsg {
+  if (m.kind === 'ask_parent') return { role: 'user', content: `ask_parent: ${m.askQuestion ?? ''}\nAnswer from the parent branch: ${m.content}` }
+  if (m.authorType === 'assistant') return { role: 'assistant', content: m.content }
+  return { role: 'user', content: `${speakerName(m, nameById)}: ${m.content}` }
+}
+
+// Maps a branch's history up to headMessageId (usually the pending assistant message) into chat
+// messages. Only finished messages are included, so the pending message itself is skipped. User and agent messages are prefixed
+// with the speaker's name (an agent's token label wins over its user's display name).
+//
+// Order, least-changing first so branches share a cached prompt prefix: the multiplayer prompt,
+// the docs the branch reads, the index of every doc, the branch context, the brief, excerpts of the
+// other docs matched to the latest message, then the history. Brief, docs, and branch context are
+// passed in live, not taken from the path.
 export function buildChatContext(
   rows: MessageRow[],
-  pendingMessageId: string,
+  headMessageId: string,
   nameById: Map<string, string>,
-  brief = '',
-  docs: BranchDocs = { pinned: [], others: [] },
+  shared: SharedContext = {},
+  forkMessageId: string | null = null,
 ): ChatMsg[] {
-  const done = pathToHead(rows, pendingMessageId).filter((m) => m.id !== pendingMessageId && m.status === 'done')
-  const turns = done
-    .map((m): ChatMsg => {
-      if (m.authorType === 'assistant') return { role: 'assistant', content: m.content }
-      const name = m.agentLabel ?? nameById.get(m.authorId) ?? 'Unknown'
-      return { role: 'user', content: `${name}: ${m.content}` }
-    })
+  const { tail, own } = branchHistory(rows, headMessageId, forkMessageId)
+  const turns = (list: MessageRow[]) => list.filter((m) => m.status === 'done').map((m) => toChatMsg(m, nameById))
+
   const system: ChatMsg[] = [{ role: 'system', content: MULTIPLAYER_PROMPT }]
-  if (brief.trim()) system.push({ role: 'system', content: `${BRIEF_HEADER}\n\n${brief}` })
-  const lastUserMsg = [...done].reverse().find((m) => m.authorType !== 'assistant')?.content ?? ''
-  system.push(...docMessages(docs, lastUserMsg))
-  return [...system, ...turns]
+  const docs = shared.docs ?? { pinned: [], others: [] }
+  system.push(...docMessages(docs))
+  if (forkMessageId) {
+    const parts = [BRANCH_CONTEXT_HEADER]
+    if (shared.purpose?.trim()) parts.push(`This branch is for: ${shared.purpose.trim()}`)
+    parts.push(shared.branchContext?.trim() || '(No branch context has been written yet.)')
+    if (shared.canAskParent) parts.push(ASK_PARENT_HINT)
+    system.push({ role: 'system', content: parts.join('\n\n') })
+  }
+  if (shared.brief?.trim()) system.push({ role: 'system', content: `${BRIEF_HEADER}\n\n${shared.brief}` })
+  const latest = [...tail, ...own].reverse().find((m) => m.status === 'done' && m.authorType !== 'assistant')
+  system.push(...docExcerpts(docs.others, latest?.content ?? ''))
+
+  const tailTurns = turns(tail)
+  if (tailTurns.length) system.push({ role: 'system', content: FORK_TAIL_HEADER })
+  return [...system, ...tailTurns, ...turns(own)]
 }
