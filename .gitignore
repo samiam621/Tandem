@@ -5,3 +5,6 @@ dist
 dist-electron
 *.tsbuildinfo
 apps/desktop/out
+.DS_Store
+.claude/timeline.md
+.claude/settings.local.json

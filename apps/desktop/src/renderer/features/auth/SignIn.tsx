@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { TandemMark } from '../../components/Icon'
 import { useAuth } from '../../app/AuthContext'
 
 export function SignIn() {
@@ -37,72 +38,76 @@ export function SignIn() {
   }
 
   return (
-    <div className="flex h-screen items-center justify-center bg-gray-950">
-      <div className="w-full max-w-sm space-y-6 px-6">
+    <div className="flex h-screen flex-col bg-canvas">
+      <div className="app-header"><span className="text-secondary">Tandem</span></div>
+      <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto py-8">
+      <div className="w-full max-w-sm space-y-5 px-6">
         <div className="text-center">
-          <h1 className="text-3xl font-bold">Tandem</h1>
-          <p className="mt-1 text-sm text-gray-400">Multiplayer AI chat for developers</p>
+          <TandemMark className="mx-auto mb-5 h-10 w-10" />
+          <h1 className="font-prose text-3xl font-normal">Better thinking, together.</h1>
+          <p className="mt-3 text-ui text-muted">Your team. Your agents. One conversation.</p>
         </div>
 
         {/* GitHub sign-in */}
         <button
           onClick={signInWithGitHub}
           disabled={loading}
-          className="flex w-full items-center justify-center gap-2 rounded-lg bg-white py-2.5 text-sm font-medium text-gray-900 hover:bg-gray-100 disabled:opacity-50"
+          className="button-primary w-full py-2.5"
         >
           <GithubIcon />
           Continue with GitHub
         </button>
 
         <div className="relative flex items-center">
-          <div className="flex-1 border-t border-gray-700" />
-          <span className="mx-3 text-xs text-gray-500">or</span>
-          <div className="flex-1 border-t border-gray-700" />
+          <div className="flex-1 border-t border-line" />
+          <span className="mx-3 text-xs text-muted">or</span>
+          <div className="flex-1 border-t border-line" />
         </div>
 
         {/* Paste fallback code from GitHub callback */}
         <form onSubmit={handleExchangeCode} className="space-y-2">
           <input
             type="text"
-            placeholder="Paste sign-in code…"
+            aria-label="Sign-in code" placeholder="Paste sign-in code…"
             value={code}
             onChange={(e) => setCode(e.target.value)}
-            className="w-full rounded-lg bg-gray-800 px-3 py-2 text-sm outline-none ring-1 ring-gray-600 focus:ring-blue-500"
+            className="field w-full"
           />
           <button
             type="submit"
             disabled={loading || !code.trim()}
-            className="w-full rounded-lg bg-blue-600 py-2 text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+            className="button-secondary w-full"
           >
             Use code
           </button>
         </form>
 
         <div className="relative flex items-center">
-          <div className="flex-1 border-t border-gray-700" />
-          <span className="mx-3 text-xs text-gray-500">or continue as guest</span>
-          <div className="flex-1 border-t border-gray-700" />
+          <div className="flex-1 border-t border-line" />
+          <span className="mx-3 text-xs text-muted">or continue as guest</span>
+          <div className="flex-1 border-t border-line" />
         </div>
 
         {/* Guest sign-in */}
         <form onSubmit={handleGuest} className="space-y-2">
           <input
             type="text"
-            placeholder="Display name"
+            aria-label="Display name" placeholder="Display name"
             value={displayName}
             onChange={(e) => setDisplayName(e.target.value)}
-            className="w-full rounded-lg bg-gray-800 px-3 py-2 text-sm outline-none ring-1 ring-gray-600 focus:ring-blue-500"
+            className="field w-full"
           />
           <button
             type="submit"
             disabled={loading || !displayName.trim()}
-            className="w-full rounded-lg bg-gray-700 py-2 text-sm font-medium hover:bg-gray-600 disabled:opacity-50"
+            className="button-secondary w-full"
           >
             {loading ? 'Signing in…' : 'Continue as guest'}
           </button>
         </form>
 
-        {error && <p className="text-center text-sm text-red-400">{error}</p>}
+        {error && <p className="text-center text-sm text-danger">{error}</p>}
+      </div>
       </div>
     </div>
   )

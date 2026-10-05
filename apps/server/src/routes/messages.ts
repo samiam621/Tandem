@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify'
 import { PostMessageSchema } from '@tandem/shared'
 import { requireAuth } from '../middleware/auth.js'
+import { sendServiceError } from './errors.js'
 import { getBranchMessages, postMessage } from '../services/messages.js'
 
 export const messageRoutes: FastifyPluginAsync = async (app) => {
@@ -22,9 +23,8 @@ export const messageRoutes: FastifyPluginAsync = async (app) => {
     try {
       const result = await postMessage(req.actor!, id, body.data.content, body.data.triggerAi)
       return reply.code(201).send(result)
-    } catch (err: any) {
-      const status = err.status ?? 500
-      return reply.code(status).send({ error: { code: err.code ?? 'server_error', message: err.message } })
+    } catch (err) {
+      return sendServiceError(reply, err)
     }
   })
 }

@@ -1,12 +1,19 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react'
-import type { Session, Branch, Message, User, SessionAgent, ProjectDocMeta } from '@tandem/shared'
+import { DOC_UPLOAD_MAX_BYTES } from '@tandem/shared'
+import type { Session, Branch, Message, User, SessionAgent, ProjectDoc, ProjectDocMeta, SessionKeyInfo } from '@tandem/shared'
 import { api } from '../../lib/api'
 import { useAuth } from '../../app/AuthContext'
 import { useWebSocket } from '../../lib/useWebSocket'
 import { MessageTreePanel } from './MessageTreePanel'
 import { MentionMenu, buildMentionItems, highlightMentions } from './MentionMenu'
 import { BriefPanel, type BriefState } from './BriefPanel'
-import { ProjectDocs } from './ProjectDocs'
+import { DocumentPanel } from './DocumentPanel'
+import { BranchContextPanel } from './BranchContextPanel'
+import { SessionKeyPanel } from './SessionKeyPanel'
+import { Icon, TandemMark } from '../../components/Icon'
+
+// openDocId while the doc panel is open on a new, unsaved doc.
+const CREATING_DOCUMENT = 'new'
 
 interface Props {
   session: Session
@@ -34,16 +41,15 @@ export function SessionView({ session, onBack, onSettings }: Props) {
   const [branchError, setBranchError] = useState<string | null>(null)
   const [branchModel, setBranchModel] = useState('')
   const [branchName, setBranchName] = useState('')
+  const [branchPurpose, setBranchPurpose] = useState('')
+  const [branchContextOpen, setBranchContextOpen] = useState(false)
+  // ── The session's own OpenRouter key (BYOK) ──────────────────────────────────
+  const [keyInfo, setKeyInfo] = useState<SessionKeyInfo | null>(null)
+  const [keyOpen, setKeyOpen] = useState(false)
   // ── Share-to-main state ──────────────────────────────────────────────────────
   const [sharingBranchId, setSharingBranchId] = useState<string | null>(null)
   const [shareConfirm, setShareConfirm] = useState(false)
   const [shareError, setShareError] = useState<string | null>(null)
-  // ── Project docs ─────────────────────────────────────────────────────────────
-  const [docs, setDocs] = useState<ProjectDocMeta[]>([])
-  // ── Branch dialog: selected doc ids to pin ────────────────────────────────────
-  const [branchDocIds, setBranchDocIds] = useState<string[]>([])
-  // ── Pinned-docs panel: open for which branch id ───────────────────────────────
-  const [pinnedPanelBranchId, setPinnedPanelBranchId] = useState<string | null>(null)
   // ── Project brief ────────────────────────────────────────────────────────────
   const [brief, setBrief] = useState<BriefState>({
     brief: session.brief ?? '',
@@ -51,6 +57,12 @@ export function SessionView({ session, onBack, onSettings }: Props) {
     briefUpdatedBy: session.briefUpdatedBy ?? null,
   })
   const [briefOpen, setBriefOpen] = useState(false)
+  // ── Project docs (main reads all; each branch reads the ones pinned to it) ──
+  const [documents, setDocuments] = useState<ProjectDocMeta[]>([])
+  const [openDocId, setOpenDocId] = useState<string | null>(null) // a doc id, or CREATING_DOCUMENT
+  const [docsError, setDocsError] = useState<string | null>(null)
+  const [branchDocIds, setBranchDocIds] = useState<string[]>([]) // selection in the branch dialog
+  const uploadRef = useRef<HTMLInputElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<HTMLInputElement>(null)
 
@@ -70,11 +82,20 @@ export function SessionView({ session, onBack, onSettings }: Props) {
   useEffect(() => {
     window.tandem.getToken().then(setToken)
     window.tandem.getServerUrl().then(setServerUrl)
-    api.models.list().then((ms) => {
-      setModels(ms)
-      if (ms.length) setBranchModel(ms[0].id)
-    }).catch(() => {})
   }, [])
+
+  // The models this session can use: every model once it has its own key, free ones otherwise.
+  const fetchModels = useCallback(() => {
+    api.models.list(session.id).then((ms) => {
+      setModels(ms)
+      setBranchModel((cur) => (ms.some((m) => m.id === cur) ? cur : ms[0]?.id ?? ''))
+    }).catch(() => {})
+  }, [session.id])
+
+  useEffect(() => {
+    fetchModels()
+    api.sessions.key(session.id).then(setKeyInfo).catch(() => {})
+  }, [session.id, fetchModels])
 
   const activeBranch = branches.find((b) => b.id === activeBranchId) ?? null
 
@@ -83,6 +104,10 @@ export function SessionView({ session, onBack, onSettings }: Props) {
       case 'presence_update':
         if (event.payload.sessionId === session.id) {
           setOnlineUsers(new Set(event.payload.onlineUsers.map((u) => u.id)))
+          // A teammate who joined after we loaded the session first shows up here; refetch members.
+          if (event.payload.onlineUsers.some((u) => !members.some((m) => m.id === u.id))) {
+            api.sessions.get(session.id).then((data) => setMembers(data.members)).catch(() => {})
+          }
         }
         break
       case 'message_created':
@@ -99,9 +124,14 @@ export function SessionView({ session, onBack, onSettings }: Props) {
           if (incoming.branchId === activeBranchId) {
             setMessages((prev) => {
               if (prev.find((m) => m.id === incoming.id)) return prev
+              // The AI's own ask_parent is recorded just before its in-progress reply.
+              const last = prev[prev.length - 1]
+              if (incoming.kind === 'ask_parent' && last && last.authorType === 'assistant' && (last.status === 'pending' || last.status === 'streaming')) {
+                return [...prev.slice(0, -1), incoming, last]
+              }
               return [...prev, incoming]
             })
-            setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
+            setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }), 50)
           }
         }
         break
@@ -114,7 +144,7 @@ export function SessionView({ session, onBack, onSettings }: Props) {
                 : m,
             ),
           )
-          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+          messagesEndRef.current?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
         }
         break
       case 'assistant_done':
@@ -137,7 +167,8 @@ export function SessionView({ session, onBack, onSettings }: Props) {
         break
       case 'branch_created':
         if (event.payload.sessionId === session.id) {
-          setBranches((prev) => prev.find((b) => b.id === event.payload.id) ? prev : [...prev, event.payload])
+          // Our own new branch also arrives in the REST response; keep one copy.
+          setBranches((prev) => (prev.some((b) => b.id === event.payload.id) ? prev : [...prev, event.payload]))
           // Pre-seed an empty entry so the tree node appears immediately
           setAllMessages((prev) => {
             if (prev.has(event.payload.id)) return prev
@@ -157,13 +188,23 @@ export function SessionView({ session, onBack, onSettings }: Props) {
         }
         break
       case 'doc_created':
+      case 'doc_updated':
         if (event.payload.sessionId === session.id) {
-          setDocs((prev) => prev.find((d) => d.id === event.payload.id) ? prev : [...prev, event.payload])
+          const doc = event.payload
+          setDocuments((prev) => upsertDocument(prev, doc))
+        }
+        break
+      case 'session_key_updated':
+        if (event.payload.sessionId === session.id) {
+          setKeyInfo(event.payload)
+          fetchModels()
         }
         break
       case 'doc_deleted':
         if (event.payload.sessionId === session.id) {
-          setDocs((prev) => prev.filter((d) => d.id !== event.payload.docId))
+          const { docId } = event.payload
+          setDocuments((prev) => prev.filter((d) => d.id !== docId))
+          setOpenDocId((cur) => (cur === docId ? null : cur))
         }
         break
       case 'typing':
@@ -194,7 +235,7 @@ export function SessionView({ session, onBack, onSettings }: Props) {
         }
         break
     }
-  }, [session.id, activeBranchId, user?.id, members])
+  }, [session.id, activeBranchId, user?.id, members, fetchModels])
 
   const { send: wsSend } = useWebSocket(serverUrl, token, session.id, handleWsEvent)
 
@@ -214,7 +255,7 @@ export function SessionView({ session, onBack, onSettings }: Props) {
       const { brief, briefUpdatedAt, briefUpdatedBy } = data.session
       setBrief({ brief, briefUpdatedAt, briefUpdatedBy })
     })
-    api.docs.list(session.id).then(setDocs).catch(() => {})
+    api.docs.list(session.id).then(setDocuments).catch(() => {})
     fetchAgents()
   }, [session.id, fetchAgents])
 
@@ -374,17 +415,67 @@ export function SessionView({ session, onBack, onSettings }: Props) {
     if (!branchingFromMsg) return
     setBranchError(null)
     try {
-      const docIds = branchDocIds.length > 0 ? branchDocIds : undefined
-      const branch = await api.branches.create(session.id, branchingFromMsg.id, branchModel, branchName || undefined, docIds)
-      // The branch_created event usually arrives before this response, so it may already be listed
-      setBranches((prev) => prev.find((b) => b.id === branch.id) ? prev : [...prev, branch])
+      const branch = await api.branches.create(session.id, branchingFromMsg.id, branchModel, branchName || undefined, branchDocIds, branchPurpose.trim() || undefined)
+      setBranches((prev) => (prev.some((b) => b.id === branch.id) ? prev : [...prev, branch]))
       setActiveBranchId(branch.id)
       setBranchingFromMsg(null)
       setBranchName('')
+      setBranchPurpose('')
       setBranchDocIds([])
     } catch (err: any) {
       setBranchError(err?.message ?? 'Failed to create branch')
     }
+  }
+
+  // The docs a branch's AI reads in full: all of them in main, the pinned ones elsewhere.
+  const readsDocument = (b: Branch | null, docId: string) => !b || b.isMain || b.pinnedDocIds.includes(docId)
+
+  // A new branch starts with what its parent branch (the one holding the fork message) reads.
+  useEffect(() => {
+    if (!branchingFromMsg) return
+    const parent = branches.find((b) => b.id === branchingFromMsg.branchId) ?? null
+    setBranchDocIds(documents.filter((d) => readsDocument(parent, d.id)).map((d) => d.id))
+    // Only when the dialog opens; later document changes should not reset the user's ticks.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [branchingFromMsg])
+
+  async function toggleBranchDocument(docId: string) {
+    if (!activeBranch || activeBranch.isMain || activeBranch.ownerId !== user?.id) return
+    const current = documents.filter((d) => readsDocument(activeBranch, d.id)).map((d) => d.id)
+    const next = current.includes(docId) ? current.filter((id) => id !== docId) : [...current, docId]
+    setDocsError(null)
+    try {
+      const updated = await api.branches.update(activeBranch.id, { pinnedDocIds: next })
+      setBranches((prev) => prev.map((b) => (b.id === updated.id ? updated : b)))
+    } catch (err: any) {
+      setDocsError(err?.message ?? 'Failed to update this branch’s docs')
+    }
+  }
+
+  // Each file becomes a doc named after it. A text file with an existing text doc's name replaces
+  // its text; a PDF is stored as its extracted text.
+  async function handleUpload(files: FileList | null) {
+    if (!files?.length) return
+    setDocsError(null)
+    for (const file of Array.from(files)) {
+      try {
+        let meta: ProjectDocMeta
+        if (file.name.toLowerCase().endsWith('.pdf')) {
+          if (file.size > DOC_UPLOAD_MAX_BYTES) throw new Error(`too large (max ${DOC_UPLOAD_MAX_BYTES / 1024 / 1024} MB)`)
+          meta = await api.docs.upload(session.id, { title: file.name, pdfBase64: await toBase64(file) })
+        } else {
+          const existing = documents.find((d) => d.title === file.name && d.kind === 'text')
+          const text = await file.text()
+          meta = existing
+            ? toMeta(await api.docs.update(existing.id, { content: text, baseUpdatedAt: existing.updatedAt }))
+            : await api.docs.upload(session.id, { title: file.name, text })
+        }
+        setDocuments((prev) => upsertDocument(prev, meta))
+      } catch (err: any) {
+        setDocsError(`${file.name}: ${err?.message ?? 'upload failed'}`)
+      }
+    }
+    if (uploadRef.current) uploadRef.current.value = ''
   }
 
   // Derive the set of branch IDs that already have a share card posted in any branch
@@ -427,76 +518,141 @@ export function SessionView({ session, onBack, onSettings }: Props) {
   return (
     <div className="flex h-screen flex-col" data-testid="session-view">
       {/* Top bar */}
-      <div className="flex items-center gap-3 border-b border-gray-800 px-4 py-2.5 shrink-0">
-        <button onClick={onBack} className="text-xs text-gray-500 hover:text-gray-300">← Back</button>
-        <span className="font-semibold truncate">{session.title}</span>
-        <span className="ml-auto flex items-center gap-3">
+      <div className="app-header">
+        <button onClick={onBack} className="icon-button" aria-label="Back to sessions" title="Back to sessions"><Icon name="back" /></button>
+        <span className="font-medium truncate">{session.title}</span>
+        <span className="text-muted">/</span>
+        <span className="truncate text-secondary">{activeBranch?.name ?? 'Loading…'}</span>
+        <span className="ml-auto flex shrink-0 items-center gap-3">
           {canShare && (
             <span className="flex items-center gap-2">
-              {shareError && <span className="text-xs text-red-400">{shareError}</span>}
-              {shareConfirm && <span className="text-xs text-green-400">Shared ✓</span>}
+              {shareError && <span className="text-xs text-danger">{shareError}</span>}
+              {shareConfirm && <span className="text-xs text-success">Shared ✓</span>}
               <button
                 onClick={handleShare}
                 disabled={sharingBranchId !== null}
-                className="text-xs rounded-lg bg-gray-700 px-3 py-1 hover:bg-gray-600 disabled:opacity-50 flex items-center gap-1.5"
+                className="text-xs rounded-lg bg-selected px-3 py-1 hover:bg-hover disabled:opacity-50 flex items-center gap-1.5"
               >
                 {sharingBranchId ? (
-                  <><span className="h-3 w-3 rounded-full border-2 border-gray-400 border-t-transparent animate-spin" />Sharing…</>
+                  <><span className="h-3 w-3 rounded-full border-2 border-secondary border-t-transparent animate-spin" />Sharing…</>
                 ) : 'Share to main'}
               </button>
             </span>
           )}
-          <span className="text-xs text-gray-500">
+          <span className="text-xs text-muted">
             {onlineUsers.size > 0 ? `${onlineUsers.size} online` : ''}
           </span>
         </span>
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         {/* Left sidebar — members + branch list */}
-        <div className="w-56 shrink-0 border-r border-gray-800 flex flex-col overflow-hidden">
+        <div className="w-56 shrink-0 border-r border-line bg-sidebar flex flex-col overflow-hidden">
+          <div className="flex items-center gap-2 px-4 py-4 font-medium"><TandemMark className="h-6 w-6" />Tandem<span className="ml-auto text-xs font-normal text-muted">Workspace</span></div>
           {/* Invite link */}
-          <div className="px-3 py-1.5 border-b border-gray-800 flex items-center justify-between">
-            <span className="text-[10px] text-gray-600 uppercase tracking-wide font-semibold">Invite</span>
+          <div className="px-3 py-1.5 border-b border-line flex items-center justify-between">
+            <span className="text-xs text-muted  font-semibold">Invite</span>
             <button
               onClick={() => window.tandem.writeText(`${serverUrl}/api/sessions/join/${session.inviteCode}`)}
-              className="text-[10px] text-gray-400 hover:text-gray-200 rounded px-1.5 py-0.5 hover:bg-gray-800"
+              className="text-xs text-secondary hover:text-primary rounded px-1.5 py-0.5 hover:bg-hover"
             >
               Copy link
             </button>
           </div>
 
-          {/* Project brief — the spec every branch's AI reads */}
+          {/* Brief — the summary of main every branch's AI reads */}
           <button
             onClick={() => setBriefOpen(true)}
-            className="mx-2 mt-2 rounded-lg border border-gray-800 px-2.5 py-2 text-left hover:bg-gray-800"
+            className="mx-2 mt-2 rounded-lg px-2.5 py-2 text-left hover:bg-hover"
           >
-            <div className="text-xs font-semibold text-gray-300">Project brief</div>
-            <div className="text-[10px] text-gray-500 truncate">
-              {brief.brief ? brief.brief.split('\n').find((l) => l.trim()) : 'Add specs every branch sees'}
+            <div className="flex items-center gap-2 text-ui font-medium text-primary"><Icon name="document" />Brief</div>
+            <div className="text-xs text-muted truncate">
+              {brief.brief ? brief.brief.split('\n').find((l) => l.trim()) : 'Summary of main every branch reads'}
             </div>
           </button>
 
-          {/* Project docs */}
-          <ProjectDocs
-            sessionId={session.id}
-            sessionOwnerId={session.ownerId}
-            currentUserId={user?.id}
-            docs={docs}
-            members={members}
-            onDocCreated={(doc) => setDocs((prev) => prev.find((d) => d.id === doc.id) ? prev : [...prev, doc])}
-            onDocDeleted={(id) => setDocs((prev) => prev.filter((d) => d.id !== id))}
-          />
+          {/* Branch context — what this branch's AI knows of the conversation it split off from */}
+          {activeBranch && !activeBranch.isMain && (
+            <button
+              onClick={() => setBranchContextOpen(true)}
+              className="mx-2 rounded-lg px-2.5 py-2 text-left hover:bg-hover"
+            >
+              <div className="flex items-center gap-2 text-ui font-medium text-primary"><Icon name="branch" />Branch context</div>
+              <div className="text-xs text-muted truncate">
+                {activeBranch.branchContext?.split('\n').find((l) => l.trim())
+                  ?? (activeBranch.branchContextUpdatedAt ? 'Empty' : 'Not written yet')}
+              </div>
+            </button>
+          )}
+
+          {/* OpenRouter key — the session's own key every member's AI runs on */}
+          <button
+            onClick={() => setKeyOpen(true)}
+            className="mx-2 mb-2 rounded-lg px-2.5 py-2 text-left hover:bg-hover"
+          >
+            <div className="flex items-center gap-2 text-ui font-medium text-primary"><Icon name="link" />OpenRouter key</div>
+            <div className="text-xs text-muted truncate">
+              {keyInfo?.hasKey ? `Session key …${keyInfo.keyLast4}` : session.ownerId === user?.id ? 'Add your key to use any model' : 'Free models'}
+            </div>
+          </button>
+
+          {/* Project docs — main reads all; a branch's AI reads the ticked (pinned) ones */}
+          <div className="px-3 py-2 border-b border-line max-h-44 overflow-y-auto">
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-xs font-medium text-muted ">Docs</p>
+              <span className="flex gap-1">
+                <button onClick={() => setOpenDocId(CREATING_DOCUMENT)} className="text-xs text-secondary hover:text-primary rounded px-1 hover:bg-hover">New</button>
+                <button onClick={() => uploadRef.current?.click()} className="text-xs text-secondary hover:text-primary rounded px-1 hover:bg-hover">Upload</button>
+                <input
+                  ref={uploadRef}
+                  type="file"
+                  multiple
+                  accept=".md,.markdown,.txt,.json,.yaml,.yml,.csv,.ts,.tsx,.js,.py,.go,.rs,.java,.sql,.html,.css,.pdf"
+                  className="hidden"
+                  onChange={(e) => handleUpload(e.target.files)}
+                />
+              </span>
+            </div>
+            {documents.length === 0 ? (
+              <p className="text-xs text-muted leading-snug">Add specs like ARCHITECTURE.md or TODO.md, or upload a PDF. Branches pin the ones their AI reads in full.</p>
+            ) : (
+              <>
+                {activeBranch && !activeBranch.isMain && (
+                  <p className="text-xs text-muted mb-0.5">Ticked: read in {activeBranch.name}</p>
+                )}
+                <ul className="space-y-0.5">
+                  {documents.map((d) => (
+                    <li key={d.id} className="flex items-center gap-1.5 text-xs">
+                      {activeBranch && !activeBranch.isMain && (
+                        <input
+                          type="checkbox"
+                          checked={readsDocument(activeBranch, d.id)}
+                          disabled={activeBranch.ownerId !== user?.id}
+                          onChange={() => toggleBranchDocument(d.id)}
+                          title={activeBranch.ownerId === user?.id ? 'Include in this branch’s AI context' : 'Only the branch owner can change this'}
+                          className="shrink-0 accent-accent"
+                        />
+                      )}
+                      <button onClick={() => setOpenDocId(d.id)} className="flex min-w-0 items-center gap-2 py-1 text-left text-secondary hover:text-primary">
+                        <Icon name="document" className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{d.title}</span>{d.kind === 'pdf' && <span className="shrink-0 text-muted">PDF</span>}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            {docsError && <p className="mt-1 text-xs text-danger break-words">{docsError}</p>}
+          </div>
 
           {/* Members — capped height so long lists don't push branches off screen */}
-          <div className="px-3 py-2 border-b border-gray-800 max-h-36 overflow-y-auto">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Members</p>
+          <div className="px-3 py-2 border-b border-line max-h-36 overflow-y-auto">
+            <p className="text-xs font-medium text-muted mb-1">Members</p>
             <ul className="space-y-0.5">
               {members.map((m) => (
                 <li key={m.id} className="flex items-center gap-1.5 text-xs py-0.5">
-                  <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${onlineUsers.has(m.id) ? 'bg-green-400' : 'bg-gray-600'}`} />
+                  <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${onlineUsers.has(m.id) ? 'bg-success' : 'bg-hover'}`} />
                   <span className="truncate">{m.displayName}</span>
-                  {m.kind === 'agent' && <span className="text-gray-500 text-[10px] shrink-0">agent</span>}
+                  {m.kind === 'agent' && <span className="text-muted text-xs shrink-0">agent</span>}
                 </li>
               ))}
             </ul>
@@ -504,35 +660,20 @@ export function SessionView({ session, onBack, onSettings }: Props) {
 
           {/* Branches */}
           <div className="flex-1 overflow-y-auto px-2 py-2 min-h-0">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1 px-1">Branches</p>
+            <p className="text-xs font-medium text-muted mb-1 px-1">Branches</p>
             <ul className="space-y-0.5">
               {branches.map((b) => (
                 <li key={b.id}>
                   <button
                     onClick={() => setActiveBranchId(b.id)}
-                    className={`w-full text-left rounded-lg px-2 py-1.5 text-xs ${activeBranchId === b.id ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800'}`}
+                    aria-current={activeBranchId === b.id ? 'page' : undefined}
+                    className={`w-full text-left rounded-lg px-2.5 py-2 text-ui ${activeBranchId === b.id ? 'bg-selected text-primary' : 'text-secondary hover:bg-hover'}`}
                   >
-                    <div className="font-medium truncate">{b.name}</div>
-                    <div className="text-gray-500 truncate">{b.model.split('/').pop()}</div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {b.ownerId === user?.id && !b.isMain && (
-                        <span className="text-blue-400 text-[10px]">yours</span>
-                      )}
-                      {/* Pinned docs indicator / control */}
-                      {!b.isMain && docs.length > 0 && (
-                        b.ownerId === user?.id ? (
-                          <button
-                            type="button"
-                            onClick={(e) => { e.stopPropagation(); setPinnedPanelBranchId(b.id) }}
-                            className="text-[10px] text-gray-500 hover:text-gray-300"
-                          >
-                            Pinned docs ({b.pinnedDocIds.length})
-                          </button>
-                        ) : b.pinnedDocIds.length > 0 ? (
-                          <span className="text-[10px] text-gray-600">Pinned docs ({b.pinnedDocIds.length})</span>
-                        ) : null
-                      )}
-                    </div>
+                    <div className="flex items-center gap-2 font-medium"><Icon name={b.isMain ? 'chat' : 'branch'} className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{b.name}</span></div>
+                    <div className="pl-6 text-xs text-muted truncate">{b.model.split('/').pop()}</div>
+                    {b.ownerId === user?.id && !b.isMain && (
+                      <span className="text-accent text-xs">yours</span>
+                    )}
                   </button>
                 </li>
               ))}
@@ -541,13 +682,12 @@ export function SessionView({ session, onBack, onSettings }: Props) {
 
           {/* Agents empty-state nudge */}
           {agents.length === 0 && (
-            <div className="px-3 py-2 border-t border-gray-800 shrink-0">
-              <p className="text-[10px] text-gray-600 leading-snug">
+            <div className="px-3 py-2 border-t border-line shrink-0">
+              <p className="text-xs text-muted leading-snug">
                 No agents connected.{' '}
-                {/* Clicking this opens Settings directly so the user can create an agent token */}
                 <button
                   onClick={onSettings}
-                  className="text-gray-500 underline hover:text-gray-300"
+                  className="text-muted underline hover:text-secondary"
                 >
                   Connect one in Settings →
                 </button>
@@ -557,13 +697,17 @@ export function SessionView({ session, onBack, onSettings }: Props) {
         </div>
 
         {/* Center — message list + composer */}
-        <div className="flex flex-1 flex-col overflow-hidden">
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+          <div className="min-h-0 flex-1 overflow-y-auto"
+            aria-label="Conversation">
+            <div className="reading-column space-y-8 py-8">
             {messages.length === 0 && (
-              <p className="text-center text-sm text-gray-600 mt-8">
-                {activeBranch ? 'No messages yet.' : 'Select a branch.'}
-              </p>
+              <div className="flex flex-col items-center py-16 text-center">
+                <TandemMark className="mb-5 h-10 w-10 text-secondary" />
+                <h2 className="font-prose text-2xl">{activeBranch ? 'A shared space to think.' : 'Choose a branch.'}</h2>
+                <p className="mt-3 max-w-sm text-ui text-muted">{activeBranch ? 'Start a conversation with your team. Branch off when an idea needs room of its own.' : 'Your conversation will appear here.'}</p>
+              </div>
             )}
             {messages.map((msg) => (
               <MessageRow
@@ -578,82 +722,89 @@ export function SessionView({ session, onBack, onSettings }: Props) {
               />
             ))}
             <div ref={messagesEndRef} />
+            </div>
           </div>
 
           {/* Branch-from dialog */}
           {branchingFromMsg && (
-            <form onSubmit={handleBranch} className="border-t border-gray-800 px-4 py-3 space-y-2 bg-gray-900 shrink-0">
-              <p className="text-xs text-gray-400 truncate">
-                Branching from: <span className="text-white">{branchingFromMsg.content.slice(0, 60)}{branchingFromMsg.content.length > 60 ? '…' : ''}</span>
+            <form onSubmit={handleBranch} className="reading-column shrink-0 border-t border-line py-4 space-y-3">
+              <p className="text-xs text-secondary truncate">
+                Branching from: <span className="text-primary">{branchingFromMsg.content.slice(0, 60)}{branchingFromMsg.content.length > 60 ? '…' : ''}</span>
               </p>
               {branchError && (
-                <p className="text-xs text-red-400 flex items-center justify-between">
+                <p className="text-xs text-danger flex items-center justify-between">
                   <span>{branchError}</span>
-                  <button type="button" onClick={() => setBranchError(null)} className="ml-2 text-red-300 hover:text-red-200">✕</button>
+                  <button type="button" onClick={() => setBranchError(null)} className="ml-2 text-danger hover:text-primary">✕</button>
                 </p>
               )}
-              {/* Pin docs to this branch */}
-              {docs.length > 0 && (
-                <div className="space-y-1">
-                  <p className="text-[10px] text-gray-500 uppercase tracking-wide font-semibold">Pin docs to this branch</p>
-                  <div className="flex flex-wrap gap-x-3 gap-y-1">
-                    {docs.map((doc) => (
-                      <label key={doc.id} className="flex items-center gap-1 text-xs text-gray-400 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={branchDocIds.includes(doc.id)}
-                          onChange={(e) => {
-                            setBranchDocIds((prev) =>
-                              e.target.checked ? [...prev, doc.id] : prev.filter((id) => id !== doc.id)
-                            )
-                          }}
-                          className="accent-blue-500"
-                        />
-                        <span className="truncate max-w-[120px]">{doc.title}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              )}
+              <input
+                type="text"
+                placeholder="What is this branch for? e.g. Frontend: settings page"
+                value={branchPurpose}
+                onChange={(e) => setBranchPurpose(e.target.value)}
+                maxLength={500}
+                aria-label="Branch purpose"
+                className="w-full rounded-lg bg-raised px-3 py-1.5 text-xs outline-none ring-1 ring-control focus:ring-accent"
+              />
+              <p className="text-xs text-muted leading-snug">
+                The branch’s AI gets a summary of this conversation written for that purpose, with sources, plus the last few messages. It can ask this branch for anything else.
+              </p>
               <div className="flex flex-wrap gap-2">
                 <input
                   type="text"
                   placeholder="Branch name (optional)"
                   value={branchName}
                   onChange={(e) => setBranchName(e.target.value)}
-                  className="flex-1 min-w-0 rounded-lg bg-gray-800 px-3 py-1.5 text-xs outline-none ring-1 ring-gray-600 focus:ring-blue-500"
+                  className="flex-1 min-w-0 rounded-lg bg-raised px-3 py-1.5 text-xs outline-none ring-1 ring-control focus:ring-accent"
                 />
                 <select
                   value={branchModel}
                   onChange={(e) => setBranchModel(e.target.value)}
-                  className="rounded-lg bg-gray-800 px-2 py-1.5 text-xs outline-none ring-1 ring-gray-600"
+                  aria-label="Branch model" className="min-w-0 max-w-full flex-1 rounded-lg bg-raised px-2 py-1.5 text-xs outline-none ring-1 ring-control"
                 >
                   {models.map((m) => (
                     <option key={m.id} value={m.id}>{m.name}</option>
                   ))}
                 </select>
-                <button type="submit" className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs hover:bg-blue-700">Branch</button>
-                <button type="button" onClick={() => { setBranchingFromMsg(null); setBranchError(null); setBranchDocIds([]) }} className="rounded-lg bg-gray-700 px-3 py-1.5 text-xs hover:bg-gray-600">Cancel</button>
+                <button type="submit" className="button-primary px-3 py-1.5 text-xs">Branch</button>
+                <button type="button" onClick={() => { setBranchingFromMsg(null); setBranchError(null) }} className="rounded-lg bg-selected px-3 py-1.5 text-xs hover:bg-hover">Cancel</button>
               </div>
+              {documents.length > 0 && (
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-secondary">
+                  <span className="text-muted">This branch's AI reads:</span>
+                  {documents.map((d) => (
+                    <label key={d.id} className="flex items-center gap-1 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={branchDocIds.includes(d.id)}
+                        onChange={() => setBranchDocIds((prev) => (prev.includes(d.id) ? prev.filter((id) => id !== d.id) : [...prev, d.id]))}
+                        className="accent-accent"
+                      />
+                      {d.title}
+                    </label>
+                  ))}
+                </div>
+              )}
             </form>
           )}
 
           {/* Typing indicator */}
           {typingText && !branchingFromMsg && (
-            <div className="px-4 pb-1 text-xs text-gray-500 italic shrink-0">{typingText}</div>
+            <div className="reading-column pb-2 text-xs text-muted shrink-0" role="status">{typingText}</div>
           )}
 
           {/* Send error */}
           {sendError && !branchingFromMsg && (
-            <div className="px-4 pb-1 shrink-0 flex items-center justify-between">
-              <p className="text-xs text-red-400">{sendError}</p>
-              <button onClick={() => setSendError(null)} className="ml-2 text-xs text-red-300 hover:text-red-200">✕</button>
+            <div className="reading-column pb-2 shrink-0 flex items-center justify-between" role="alert">
+              <p className="text-xs text-danger">{sendError}</p>
+              <button onClick={() => setSendError(null)} className="ml-2 text-xs text-danger hover:text-primary">✕</button>
             </div>
           )}
 
           {/* Composer */}
           {!branchingFromMsg && (
-            <form onSubmit={handleSend} className="relative border-t border-gray-800 px-4 py-3 flex gap-2 shrink-0">
+            <div className="reading-column shrink-0 pb-5 pt-2">
+            <form onSubmit={handleSend} className="composer">
               {/* Mention menu — anchored above the input */}
               {mentionOpen && canPost && (
                 <MentionMenu
@@ -673,26 +824,33 @@ export function SessionView({ session, onBack, onSettings }: Props) {
                     value={composerText}
                     onChange={handleComposerChange}
                     onKeyDown={handleComposerKeyDown}
-                    placeholder="Message… (type @ to mention)"
+                    aria-label="Message"
+                    role="combobox"
+                    aria-autocomplete="list"
+                    aria-expanded={mentionOpen && mentionItems.some((item) => item.label.toLowerCase().startsWith(mentionQuery.toLowerCase()))}
+                    aria-controls={mentionOpen ? 'mention-list' : undefined}
+                    aria-activedescendant={mentionOpen && mentionItems.some((item) => item.label.toLowerCase().startsWith(mentionQuery.toLowerCase())) ? `mention-${mentionIndex}` : undefined}
+                    placeholder="Message your team…"
                     disabled={sending}
-                    className="flex-1 rounded-lg bg-gray-800 px-3 py-2 text-sm outline-none ring-1 ring-gray-700 focus:ring-blue-500 disabled:opacity-50"
+                    className="min-w-0 flex-1 bg-transparent px-1 py-2 text-message outline-none focus-visible:outline-none disabled:opacity-50"
                   />
                   <button
                     type="submit"
                     disabled={sending || !composerText.trim()}
-                    className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+                    className="button-primary h-9 w-9 shrink-0 p-0"
+                    aria-label="Send message" title="Send message"
                   >
-                    Send
+                    <Icon name="send" />
                   </button>
                 </>
               ) : (
-                <div className="flex items-center gap-3 py-1">
-                  <p className="text-sm text-gray-500">Read-only branch.</p>
+                <div className="flex flex-wrap items-center gap-3 py-1">
+                  <p className="text-sm text-muted">Read-only branch.</p>
                   {messages.length > 0 && (
                     <button
                       type="button"
                       onClick={() => setBranchingFromMsg(messages[messages.length - 1])}
-                      className="text-xs rounded-lg bg-gray-700 px-3 py-1.5 hover:bg-gray-600"
+                      className="text-xs rounded-lg bg-selected px-3 py-1.5 hover:bg-hover"
                     >
                       Branch from latest
                     </button>
@@ -700,11 +858,13 @@ export function SessionView({ session, onBack, onSettings }: Props) {
                 </div>
               )}
             </form>
+            {canPost && <div className="mt-2 flex items-center justify-between text-xs text-muted"><span>@ to mention a teammate</span><span>Enter to send</span></div>}
+            </div>
           )}
         </div>
 
         {/* Right — message tree visual */}
-        <div className="w-44 shrink-0 border-l border-gray-800 overflow-hidden flex flex-col">
+        <div className="w-44 shrink-0 border-l border-line bg-sidebar overflow-hidden flex flex-col">
           <MessageTreePanel
             branches={branches}
             allMessages={allMessages}
@@ -725,91 +885,67 @@ export function SessionView({ session, onBack, onSettings }: Props) {
         />
       )}
 
-      {/* Pinned-docs panel — lets a branch owner change which docs are pinned */}
-      {pinnedPanelBranchId && (() => {
-        const pb = branches.find((b) => b.id === pinnedPanelBranchId)
-        if (!pb) return null
-        return (
-          <PinnedDocsPanel
-            branch={pb}
-            docs={docs}
-            onClose={() => setPinnedPanelBranchId(null)}
-            onBranchUpdated={(updated) => setBranches((prev) => prev.map((b) => b.id === updated.id ? updated : b))}
-          />
-        )
-      })()}
+      {branchContextOpen && activeBranch && !activeBranch.isMain && (
+        <BranchContextPanel
+          key={activeBranch.id}
+          branch={activeBranch}
+          members={members}
+          canEdit={activeBranch.ownerId === user?.id}
+          onChange={(next) => setBranches((prev) => prev.map((b) => (b.id === next.id ? next : b)))}
+          onClose={() => setBranchContextOpen(false)}
+        />
+      )}
+
+      {keyOpen && keyInfo && (
+        <SessionKeyPanel
+          info={keyInfo}
+          isOwner={session.ownerId === user?.id}
+          members={members}
+          onChange={(next) => { setKeyInfo(next); fetchModels() }}
+          onClose={() => setKeyOpen(false)}
+        />
+      )}
+
+      {openDocId && (
+        <DocumentPanel
+          key={openDocId}
+          sessionId={session.id}
+          meta={documents.find((d) => d.id === openDocId) ?? null}
+          members={members}
+          canDelete={(() => {
+            const d = documents.find((x) => x.id === openDocId)
+            return Boolean(d && (d.uploadedBy === user?.id || session.ownerId === user?.id))
+          })()}
+          onSaved={(doc) => {
+            setDocuments((prev) => upsertDocument(prev, doc))
+            setOpenDocId(doc.id)
+          }}
+          onDeleted={(id) => {
+            setDocuments((prev) => prev.filter((d) => d.id !== id))
+            setOpenDocId(null)
+          }}
+          onClose={() => setOpenDocId(null)}
+        />
+      )}
     </div>
   )
 }
 
-
-// ─── PinnedDocsPanel ──────────────────────────────────────────────────────────
-// Controlled checklist that saves each toggle immediately. Disables all inputs
-// while a PATCH is in flight so rapid clicks don't cause races.
-
-function PinnedDocsPanel({
-  branch, docs, onClose, onBranchUpdated,
-}: {
-  branch: Branch
-  docs: import('@tandem/shared').ProjectDocMeta[]
-  onClose: () => void
-  onBranchUpdated: (b: Branch) => void
-}) {
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  async function toggle(docId: string, checked: boolean) {
-    const next = checked
-      ? [...branch.pinnedDocIds, docId]
-      : branch.pinnedDocIds.filter((id) => id !== docId)
-    setSaving(true)
-    setError(null)
-    try {
-      const updated = await api.branches.update(branch.id, { pinnedDocIds: next })
-      onBranchUpdated(updated)
-    } catch (err: any) {
-      setError(err?.message ?? 'Save failed')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
-      <div
-        className="w-full max-w-sm rounded-xl border border-gray-700 bg-gray-900 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-gray-800 px-4 py-3">
-          <h2 className="text-sm font-semibold">Pinned docs — {branch.name}</h2>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300 text-sm px-2">✕</button>
-        </div>
-        <div className="px-4 py-3 space-y-2">
-          {error && <p className="text-xs text-red-400">{error}</p>}
-          {docs.length === 0 ? (
-            <p className="text-xs text-gray-500">No docs in this session yet.</p>
-          ) : (
-            docs.map((doc) => (
-              <label key={doc.id} className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={branch.pinnedDocIds.includes(doc.id)}
-                  disabled={saving}
-                  className="accent-blue-500 disabled:opacity-50"
-                  onChange={(e) => toggle(doc.id, e.target.checked)}
-                />
-                <span className="truncate">{doc.title}</span>
-                <span className="text-gray-600 shrink-0">{doc.chars.toLocaleString()} chars</span>
-              </label>
-            ))
-          )}
-          {saving && <p className="text-[10px] text-gray-500">Saving…</p>}
-        </div>
-      </div>
-    </div>
-  )
+function upsertDocument(docs: ProjectDocMeta[], doc: ProjectDocMeta): ProjectDocMeta[] {
+  const rest = docs.filter((d) => d.id !== doc.id)
+  return [...rest, doc].sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1)) // same order as the server (oldest first)
 }
 
+function toMeta({ content, ...doc }: ProjectDoc): ProjectDocMeta {
+  return { ...doc, chars: content.length }
+}
+
+async function toBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  return btoa(binary)
+}
 
 function MessageRow({
   msg, currentUserId, members, branches, mentionLabelSet, onBranchFrom, onOpenBranch,
@@ -822,122 +958,59 @@ function MessageRow({
   onBranchFrom: () => void
   onOpenBranch: (branchId: string) => void
 }) {
-  const [hovered, setHovered] = useState(false)
   const author = members.find((m) => m.id === msg.authorId)
   const isAssistant = msg.authorType === 'assistant'
   const isAgent = msg.authorType === 'agent'
-  // An agent posts as its token's owner, but its messages are not "mine".
-  const isMe = msg.authorId === currentUserId && !isAgent
+  const isProse = isAssistant || isAgent
+  const isMe = msg.authorId === currentUserId && !isProse
+  const authorName = isAssistant
+    ? msg.model?.split('/').pop() ?? 'AI'
+    : isAgent ? msg.agentLabel?.trim() || author?.displayName || 'Agent'
+    : author?.displayName ?? 'Unknown'
 
-  // ── Summary card for shared-branch messages ──────────────────────────────────
-  if (msg.sharedFromBranchId) {
-    const sourceBranch = branches.find((b) => b.id === msg.sharedFromBranchId)
+  if (msg.kind === 'ask_parent') {
+    const answeredBy = branches.find((b) => b.id === msg.askedBranchId)
     return (
-      <div className="rounded-xl border border-blue-900/60 bg-blue-950/30 px-4 py-3 space-y-1.5">
-        <div className="flex items-center gap-2 text-xs text-blue-400 font-medium">
-          <span>↗</span>
-          <span>Summary from branch: {sourceBranch?.name ?? msg.sharedFromBranchId}</span>
+      <article className="rounded-xl border border-line p-4 space-y-2">
+        <div className="flex items-center gap-2 text-xs text-secondary">
+          <Icon name="branch" />
+          <span className="min-w-0 break-words">Asked {answeredBy?.name ?? 'the parent branch'}</span>
         </div>
-        <p className="text-sm text-gray-200 whitespace-pre-wrap break-words">
-          {highlightMentions(msg.content, mentionLabelSet)}
-        </p>
-        {sourceBranch && (
-          <button
-            onClick={() => onOpenBranch(sourceBranch.id)}
-            className="text-xs text-blue-400 hover:text-blue-300"
-          >
-            Open branch →
-          </button>
-        )}
-      </div>
+        <p className="text-ui text-secondary whitespace-pre-wrap [overflow-wrap:anywhere]">{msg.askQuestion}</p>
+        <p className="message-prose whitespace-pre-wrap [overflow-wrap:anywhere]">{msg.content}</p>
+      </article>
     )
   }
 
-  // Avatar circle style
-  const avatarClass = isAssistant
-    ? 'bg-purple-700'
-    : isAgent
-    ? 'bg-teal-800'
-    : 'bg-gray-700'
-
-  // Avatar label
-  const avatarContent = isAssistant
-    ? 'AI'
-    : isAgent
-    ? '⚙'
-    : (author?.displayName[0] ?? '?').toUpperCase()
-
-  // Author line text
-  let authorLabel: React.ReactNode
-  if (isAssistant) {
-    authorLabel = msg.model?.split('/').pop() ?? 'AI'
-  } else if (isAgent) {
-    const label = msg.agentLabel?.trim()
-    if (label) {
-      const ownerName = author?.displayName
-      authorLabel = (
-        <>
-          <span className="text-teal-400">{label}</span>
-          {ownerName && (
-            <span className="text-gray-600"> · via {ownerName}</span>
-          )}
-        </>
-      )
-    } else {
-      // No agentLabel — fall back to old badge
-      authorLabel = (
-        <>
-          {author?.displayName ?? 'Unknown'}
-          <span className="text-[10px] text-gray-600 ml-1">agent</span>
-        </>
-      )
-    }
-  } else {
-    authorLabel = author?.displayName ?? 'Unknown'
-  }
-
-  // Bubble style
-  let bubbleClass: string
-  if (isAgent) {
-    bubbleClass = 'bg-gray-800 text-gray-100 border-l-2 border-teal-500 rounded-2xl'
-  } else if (isAssistant) {
-    bubbleClass = 'bg-gray-800 text-gray-100 rounded-2xl'
-  } else if (isMe) {
-    bubbleClass = 'bg-blue-600 text-white rounded-2xl'
-  } else {
-    bubbleClass = 'bg-gray-800 text-gray-100 rounded-2xl'
+  if (msg.sharedFromBranchId) {
+    const sourceBranch = branches.find((b) => b.id === msg.sharedFromBranchId)
+    return (
+      <article className="rounded-xl border border-line bg-raised p-4 space-y-3">
+        <div className="flex items-center gap-2 text-xs text-secondary">
+          <Icon name="branch" />
+          <span className="min-w-0 break-words">Summary from {sourceBranch?.name ?? 'a branch'}</span>
+        </div>
+        <p className="message-prose whitespace-pre-wrap">{highlightMentions(msg.content, mentionLabelSet)}</p>
+        {sourceBranch && <button onClick={() => onOpenBranch(sourceBranch.id)} className="inline-flex items-center gap-2 text-xs text-accent hover:text-primary">Open branch <span aria-hidden="true">→</span></button>}
+      </article>
+    )
   }
 
   return (
-    <div
-      className={`group flex gap-3 ${isMe ? 'flex-row-reverse' : ''}`}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
-      <div className={`h-7 w-7 shrink-0 rounded-full flex items-center justify-center text-xs font-bold ${avatarClass}`}>
-        {avatarContent}
+    <article className={`group flex flex-col gap-2 ${isMe ? 'items-end' : 'items-start'}`}>
+      <div className="flex max-w-full flex-wrap items-center gap-2 text-xs text-muted">
+        {isProse && <Icon name="sparkle" className="h-3.5 w-3.5" />}
+        <span className="break-all font-medium text-secondary">{authorName}</span>
+        {isAgent && <span>agent{author ? ` · via ${author.displayName}` : ''}</span>}
+        {isAssistant && <span>AI</span>}
+        {msg.status === 'done' && (
+          <button onClick={onBranchFrom} className="branch-action"><Icon name="branch" className="h-3 w-3" />Branch from here</button>
+        )}
       </div>
-      <div className={`max-w-[70%] flex flex-col gap-0.5 ${isMe ? 'items-end' : 'items-start'}`}>
-        <div className="flex items-baseline gap-2">
-          <span className="text-xs text-gray-500">{authorLabel}</span>
-          {hovered && msg.status === 'done' && (
-            <button
-              onClick={onBranchFrom}
-              className="text-[10px] text-blue-400 hover:text-blue-300 ml-1"
-            >
-              Branch from here
-            </button>
-          )}
-        </div>
-        <div className={`px-3 py-2 text-sm whitespace-pre-wrap break-words ${bubbleClass}${
-          msg.status === 'error' ? ' !bg-red-900/40 text-red-300' : ''
-        }`}>
-          {msg.content
-            ? highlightMentions(msg.content, mentionLabelSet)
-            : (msg.status === 'pending' ? '…' : '')}
-          {msg.status === 'streaming' && <span className="ml-1 animate-pulse">▋</span>}
-        </div>
+      <div className={`max-w-full whitespace-pre-wrap [overflow-wrap:anywhere] ${isProse ? 'message-prose w-full' : 'text-message'} ${isMe ? 'rounded-xl bg-raised px-4 py-3' : ''} ${msg.status === 'error' ? 'rounded-lg bg-danger/10 p-3 text-danger' : ''}`}>
+        {msg.content ? highlightMentions(msg.content, mentionLabelSet) : msg.status === 'pending' ? <span className="font-sans text-ui text-muted" role="status">Thinking…</span> : ''}
+        {msg.status === 'streaming' && <span className="ml-1 animate-pulse text-secondary" aria-label="Streaming">▍</span>}
       </div>
-    </div>
+    </article>
   )
 }

@@ -66,7 +66,7 @@ const reply = await mcp(claude, 'post_message', { branchId: main, content: 'Plan
 ok('Claude replies, labelled "Claude"', reply.agentLabel === 'Claude')
 
 // Sam branches off from Claude's reply, works there, and shares the result back to main.
-// Use the default free model here too — paid model IDs are now rejected with 400
+// Use the default free model here too — a paid model needs the session to have its own key
 const branch = (await call(`/api/sessions/${sessionId}/branches`, sam, { fromMessageId: reply.id, model: 'qwen/qwen3.8-27b:free', name: 'e2e-branch' })).body
 await call(`/api/branches/${branch.id}/messages`, sam, { content: 'Tried it on the branch: works.', triggerAi: false })
 const shared = await call(`/api/branches/${branch.id}/share`, sam, {})

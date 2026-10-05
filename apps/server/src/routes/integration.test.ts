@@ -16,6 +16,11 @@ import { recoverStaleMessages } from '../services/messages.js'
 import { resolveToken } from '../services/auth.js'
 import { listMentions, waitForMentions, getBranchContext, setWorking } from '../services/agents.js'
 import { bus } from '../events.js'
+import { BRIEF_REFRESH_EVERY } from '../services/brief.js'
+import * as openrouter from '../ai/openrouter.js'
+import * as keys from '../ai/keys.js'
+import { askParent } from '../services/askParent.js'
+import { BRIEF_AUTO_REFRESH_AUTHOR } from '@tandem/shared'
 import Database from 'better-sqlite3'
 import { drizzle } from 'drizzle-orm/better-sqlite3'
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator'
@@ -116,7 +121,7 @@ describe('REST integration', () => {
       payload: { title: 'Paid Model Session', defaultModel: 'openai/gpt-4o-mini' },
     })
     expect(res.statusCode).toBe(400)
-    // FreeModelIdSchema is part of the Zod shape now, so the error code is invalid_request
+    // A new session has no key of its own, so its default model must be :free
     expect(res.json().error.code).toBe('invalid_request')
   })
 
@@ -423,7 +428,8 @@ describe('REST integration', () => {
     // Agents see the docs list and can search them
     const claude = (await resolveToken(claudeToken))!
     const ctx = (await getBranchContext(claude, branch.id, 200))!
-    expect(ctx.docs.map((d) => d.title)).toEqual(['Auth spec', 'Deploy spec'])
+    expect(ctx.docs.map((d) => d.title)).toEqual(['Auth spec', 'Deploy spec']) // both pinned, so read in full
+    expect(ctx.otherDocs).toEqual([])
     expect(ctx.branch.pinnedDocIds).toHaveLength(2)
     expect(searchDocs(claude, sessionId, 'render instance', 3)[0].docId).toBe(pdf.json().id)
 
@@ -435,6 +441,124 @@ describe('REST integration', () => {
     expect(after.find((b: any) => b.id === branch.id).pinnedDocIds).toEqual([auth.json().id])
     expect(seen).toContain('doc_deleted')
     expect(sessionDocs(sessionId).map((d) => d.title)).toEqual(['Auth spec'])
+    bus.offSession(onEvent)
+  })
+
+  it('POST /api/sessions/:id/brief/refresh rewrites the brief from main (members only)', async () => {
+    const refresh = (tok: string) =>
+      app.inject({ method: 'POST', url: `/api/sessions/${sessionId}/brief/refresh`, headers: { authorization: `Bearer ${tok}` } })
+    const res = await refresh(user2Token)
+    expect(res.statusCode).toBe(200)
+    expect(res.json().brief).toMatch(/Dev mode/) // no OPENROUTER_API_KEY in tests: the summarizer's stub
+    expect(res.json().briefUpdatedBy).not.toBe(userId)
+    const outsider = (await app.inject({
+      method: 'POST', url: '/api/auth/guest', payload: { displayName: 'Eve', deviceId: 'device-eve-refresh' },
+    })).json().token
+    expect((await refresh(outsider)).statusCode).toBe(404)
+  })
+
+  it('the brief refreshes itself every BRIEF_REFRESH_EVERY main messages; a failed attempt waits for the next batch', async () => {
+    // A fresh user and session: the rate limit counts per user, and main must start with no messages.
+    const guest = (await app.inject({
+      method: 'POST', url: '/api/auth/guest', payload: { displayName: 'Brief Bot Tester', deviceId: 'device-brief-auto' },
+    })).json().token
+    const created = (await app.inject({
+      method: 'POST', url: '/api/sessions', headers: { authorization: `Bearer ${guest}` },
+      payload: { title: 'Auto brief', defaultModel: 'openai/gpt-4o-mini:free' },
+    })).json()
+    const postToMain = async (n: number) => {
+      for (let i = 0; i < n; i++) {
+        await app.inject({
+          method: 'POST', url: `/api/branches/${created.mainBranch.id}/messages`,
+          headers: { authorization: `Bearer ${guest}` }, payload: { content: `update ${i}`, triggerAi: false },
+        })
+      }
+    }
+    const getBrief = async () => (await app.inject({
+      method: 'GET', url: `/api/sessions/${created.session.id}`, headers: { authorization: `Bearer ${guest}` },
+    })).json().session
+
+    // Without a model it never runs, so the dev stub cannot overwrite a hand-written brief.
+    const summarize = vi.spyOn(openrouter, 'summarize').mockRejectedValue(new Error('model down'))
+    await postToMain(BRIEF_REFRESH_EVERY)
+    expect(summarize).not.toHaveBeenCalled()
+
+    // With a model: the threshold was already reached, so the next main message starts a refresh.
+    const configured = vi.spyOn(openrouter, 'aiConfigured').mockReturnValue(true)
+    try {
+      await postToMain(1)
+      expect(summarize).toHaveBeenCalledTimes(1)
+      // It failed. The next messages do not call the model again until another full batch lands.
+      await postToMain(BRIEF_REFRESH_EVERY - 1)
+      expect(summarize).toHaveBeenCalledTimes(1)
+      summarize.mockResolvedValue('Team is shipping the auto brief.')
+      await postToMain(1)
+      expect(summarize).toHaveBeenCalledTimes(2)
+      await vi.waitFor(async () => expect((await getBrief()).brief).toBe('Team is shipping the auto brief.'))
+      expect((await getBrief()).briefUpdatedBy).toBe(BRIEF_AUTO_REFRESH_AUTHOR)
+      // A successful refresh resets the count.
+      await postToMain(BRIEF_REFRESH_EVERY - 1)
+      expect(summarize).toHaveBeenCalledTimes(2)
+    } finally {
+      configured.mockRestore()
+      summarize.mockRestore()
+    }
+  })
+
+  it('project docs: members write and edit with conflict checks; main reads every doc, branches copy their parent\'s pins', async () => {
+    const auth = (tok: string) => ({ authorization: `Bearer ${tok}` })
+    const create = (tok: string, title: string, text: string) =>
+      app.inject({ method: 'POST', url: `/api/sessions/${sessionId}/docs`, headers: auth(tok), payload: { title, text } })
+    const edit = (tok: string, id: string, payload: object) =>
+      app.inject({ method: 'PUT', url: `/api/docs/${id}`, headers: auth(tok), payload })
+    const user2Id = (await resolveToken(user2Token))!.userId
+    const seen: any[] = []
+    const onEvent = ({ event }: any) => event.type.startsWith('doc_') && seen.push(event)
+    bus.onSession(onEvent)
+
+    const arch = (await create(token, 'ARCHITECTURE.md', '# Arch v1')).json()
+    const todo = (await create(user2Token, 'TODO.md', '- [ ] UI')).json()
+    expect(arch).toMatchObject({ title: 'ARCHITECTURE.md', kind: 'text', updatedBy: userId })
+    expect(arch.updatedAt).toBe(arch.createdAt)
+
+    // Saving from an outdated version is refused; any member may edit.
+    const v2 = await edit(user2Token, arch.id, { content: '# Arch v2', baseUpdatedAt: arch.updatedAt })
+    expect(v2.statusCode).toBe(200)
+    expect(v2.json()).toMatchObject({ content: '# Arch v2', updatedBy: user2Id })
+    expect(seen.at(-1)).toMatchObject({ type: 'doc_updated', payload: { id: arch.id, chars: 9 } })
+    expect(seen.at(-1).payload.content).toBeUndefined()
+    expect((await edit(token, arch.id, { content: 'stale', baseUpdatedAt: arch.updatedAt })).statusCode).toBe(409)
+    const renamed = await edit(token, arch.id, { title: 'ARCH.md', content: '# Arch v3', baseUpdatedAt: v2.json().updatedAt })
+    expect(renamed.json().title).toBe('ARCH.md')
+
+    // A branch from main pins every doc by default; a sub-branch copies its parent's pins.
+    const mainMsgs = (await app.inject({ method: 'GET', url: `/api/branches/${mainBranchId}/messages`, headers: auth(token) })).json()
+    const fromMessageId = mainMsgs.at(-1).id
+    const branch = (body: object) => app.inject({ method: 'POST', url: `/api/sessions/${sessionId}/branches`, headers: auth(token), payload: body })
+    const everything = (await branch({ fromMessageId, model: 'test-model:free', name: 'backend' })).json()
+    expect(everything.pinnedDocIds).toEqual(expect.arrayContaining([arch.id, todo.id]))
+    const frontend = (await branch({ fromMessageId, model: 'test-model:free', name: 'frontend', docIds: [todo.id] })).json()
+    await app.inject({
+      method: 'POST', url: `/api/branches/${frontend.id}/messages`, headers: auth(token), payload: { content: 'login form next', triggerAi: false },
+    })
+    const frontMsgs = (await app.inject({ method: 'GET', url: `/api/branches/${frontend.id}/messages`, headers: auth(token) })).json()
+    const login = (await branch({ fromMessageId: frontMsgs.at(-1).id, model: 'test-model:free', name: 'login' })).json()
+    expect(login.pinnedDocIds).toEqual([todo.id])
+
+    // Agents get pinned docs in full and the rest listed; main reads every doc, always the latest text.
+    const claude = (await resolveToken(claudeToken))!
+    const ctx = (await getBranchContext(claude, frontend.id, 200))!
+    expect(ctx.docs.map((d) => d.title)).toEqual(['TODO.md'])
+    expect(ctx.otherDocs.map((d) => d.title)).toContain('ARCH.md')
+    const mainCtx = (await getBranchContext(claude, mainBranchId, 200))!
+    expect(mainCtx.docs.find((d) => d.id === arch.id)!.content).toBe('# Arch v3')
+    expect(mainCtx.otherDocs).toEqual([])
+
+    // Outsiders can neither read nor edit.
+    const outsider = (await app.inject({
+      method: 'POST', url: '/api/auth/guest', payload: { displayName: 'Eve', deviceId: 'device-eve-docs' },
+    })).json().token
+    expect((await edit(outsider, todo.id, { content: 'x', baseUpdatedAt: todo.updatedAt })).statusCode).toBe(404)
     bus.offSession(onEvent)
   })
 
@@ -504,6 +628,108 @@ describe('REST integration', () => {
       payload: { content: 'note to self @Claude', triggerAi: false },
     })
     expect(listMentions(claude, '').length).toBe(before)
+  })
+
+  it('session key: only the owner sets or removes it, and only its last four characters leave the server', async () => {
+    const url = `/api/sessions/${sessionId}/key`
+    const call = (method: 'GET' | 'PUT' | 'DELETE', tok: string, payload?: object) =>
+      app.inject({ method, url, headers: { authorization: `Bearer ${tok}` }, payload })
+    const rawKey = 'sk-or-v1-secretsecretsecret9xyz'
+    const verify = vi.spyOn(keys, 'verifyOpenRouterKey').mockResolvedValue(true)
+    const seen: any[] = []
+    const onEvent = ({ event }: any) => event.type === 'session_key_updated' && seen.push(event.payload)
+    bus.onSession(onEvent)
+    try {
+      expect((await call('GET', user2Token)).json()).toMatchObject({ hasKey: false, keyLast4: null })
+      expect((await call('PUT', token, { key: 'not-a-key' })).statusCode).toBe(400)
+      expect((await call('PUT', user2Token, { key: rawKey })).statusCode).toBe(403)
+
+      const set = await call('PUT', token, { key: rawKey })
+      expect(set.statusCode).toBe(200)
+      expect(set.json()).toMatchObject({ hasKey: true, keyLast4: '9xyz', setBy: userId })
+      expect(set.body).not.toContain(rawKey)
+      expect((await call('GET', user2Token)).json()).toMatchObject({ hasKey: true, keyLast4: '9xyz' })
+      expect(JSON.stringify(seen)).not.toContain(rawKey)
+      const stored = testDb.select().from(schema.sessionKeys).all()
+      expect(JSON.stringify(stored)).not.toContain(rawKey)
+      expect(keys.apiKeyFor(sessionId)).toEqual({ apiKey: rawKey, byok: true })
+
+      // With its own key the session may use paid models; without one, only :free.
+      const mainMsgs = (await app.inject({ method: 'GET', url: `/api/branches/${mainBranchId}/messages`, headers: { authorization: `Bearer ${token}` } })).json()
+      const paidBranch = () => app.inject({
+        method: 'POST', url: `/api/sessions/${sessionId}/branches`, headers: { authorization: `Bearer ${token}` },
+        payload: { fromMessageId: mainMsgs[0].id, model: 'openai/gpt-4o-mini', name: 'paid' },
+      })
+      const paid = await paidBranch()
+      expect(paid.statusCode).toBe(201)
+      const patchModel = (model: string) => app.inject({
+        method: 'PATCH', url: `/api/branches/${paid.json().id}`, headers: { authorization: `Bearer ${token}` }, payload: { model },
+      })
+      expect((await patchModel('anthropic/claude-sonnet-4')).statusCode).toBe(200)
+
+      verify.mockResolvedValue(false)
+      expect((await call('PUT', token, { key: 'sk-or-v1-wrong' })).json().error.code).toBe('invalid_key')
+
+      expect((await call('DELETE', user2Token)).statusCode).toBe(403)
+      expect((await call('DELETE', token)).json()).toMatchObject({ hasKey: false })
+      expect(keys.apiKeyFor(sessionId).byok).toBe(false)
+      expect((await paidBranch()).statusCode).toBe(400)
+      expect((await patchModel('openai/gpt-4o')).statusCode).toBe(400)
+      expect((await patchModel('test-model:free')).statusCode).toBe(200)
+      expect(seen.map((e) => e.hasKey)).toEqual([true, false])
+    } finally {
+      bus.offSession(onEvent)
+      verify.mockRestore()
+      keys.deleteSessionKey(sessionId) // later tests must not run on a key
+    }
+  })
+
+  it('a branch forked late does not inherit main\'s earlier history, and keeps its purpose', async () => {
+    const auth = { authorization: `Bearer ${token}` }
+    for (let i = 1; i <= 8; i++) {
+      await app.inject({ method: 'POST', url: `/api/branches/${mainBranchId}/messages`, headers: auth, payload: { content: `plan ${i}`, triggerAi: false } })
+    }
+    const mainMsgs = (await app.inject({ method: 'GET', url: `/api/branches/${mainBranchId}/messages`, headers: auth })).json()
+    const res = await app.inject({
+      method: 'POST', url: `/api/sessions/${sessionId}/branches`, headers: auth,
+      payload: { fromMessageId: mainMsgs.at(-1).id, model: 'test-model:free', name: 'frontend', purpose: 'Frontend: settings page' },
+    })
+    expect(res.statusCode).toBe(201)
+    expect(res.json()).toMatchObject({ purpose: 'Frontend: settings page', branchContext: null })
+
+    const ctx = (await getBranchContext((await resolveToken(claudeToken))!, res.json().id, 200))!
+    expect(ctx.purpose).toBe('Frontend: settings page')
+    expect(ctx.messages.map((m) => m.content)).toEqual(['plan 3', 'plan 4', 'plan 5', 'plan 6', 'plan 7', 'plan 8'])
+    expect(ctx.messages.map((m) => m.content)).not.toContain('Hello integration test!')
+  })
+
+  it('PUT /api/branches/:id/context: owner only, stale saves conflict, main has none', async () => {
+    const put = (branchId: string, tok: string, payload: object) =>
+      app.inject({ method: 'PUT', url: `/api/branches/${branchId}/context`, headers: { authorization: `Bearer ${tok}` }, payload })
+    expect((await put(bugfixBranchId, user2Token, { content: 'x', baseUpdatedAt: null })).statusCode).toBe(403)
+    expect((await put(mainBranchId, token, { content: 'x', baseUpdatedAt: null })).statusCode).toBe(400)
+
+    const first = await put(bugfixBranchId, token, { content: '- Fix the login bug [Alice in main, Oct 2]', baseUpdatedAt: null })
+    expect(first.statusCode).toBe(200)
+    expect(first.json()).toMatchObject({ branchContext: '- Fix the login bug [Alice in main, Oct 2]', branchContextUpdatedBy: userId })
+    expect((await put(bugfixBranchId, token, { content: 'stale', baseUpdatedAt: null })).statusCode).toBe(409)
+    expect((await put(bugfixBranchId, token, { content: 'next', baseUpdatedAt: first.json().branchContextUpdatedAt })).statusCode).toBe(200)
+
+    const regen = await app.inject({ method: 'POST', url: `/api/branches/${bugfixBranchId}/context/regenerate`, headers: { authorization: `Bearer ${token}` } })
+    expect(regen.json().error.code).toBe('no_model') // no OpenRouter key in tests
+  })
+
+  it('askParent records the question and answer in the asking branch (owner only, never main)', async () => {
+    const claude = (await resolveToken(claudeToken))!
+    const result = await askParent(claude, bugfixBranchId, 'Which database did we pick?')
+    expect(result.answeredBy).toEqual({ branchId: mainBranchId, branchName: 'main' })
+    expect(result.answer).toContain('Dev mode') // no OpenRouter key in tests
+    expect(result.message).toMatchObject({ branchId: bugfixBranchId, kind: 'ask_parent', askQuestion: 'Which database did we pick?', askedBranchId: mainBranchId })
+
+    const msgs = (await app.inject({ method: 'GET', url: `/api/branches/${bugfixBranchId}/messages`, headers: { authorization: `Bearer ${token}` } })).json()
+    expect(msgs.at(-1).id).toBe(result.message.id) // the new head of the branch
+    await expect(askParent(claude, mainBranchId, 'q')).rejects.toMatchObject({ status: 400 })
+    await expect(askParent((await resolveToken(user2Token))!, bugfixBranchId, 'q')).rejects.toMatchObject({ status: 403 })
   })
 
   it('POST /api/auth/exchange with invalid code → 401', async () => {

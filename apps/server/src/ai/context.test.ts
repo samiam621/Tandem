@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import type { messages } from '../db/schema.js'
 import { PINNED_DOCS_MAX_CHARS } from '@tandem/shared'
-import { buildChatContext, BRIEF_HEADER, MULTIPLAYER_PROMPT, PINNED_HEADER, EXCERPTS_HEADER } from './context.js'
+import {
+  buildChatContext, forkTail, BRIEF_HEADER, PINNED_HEADER, INDEX_HEADER, EXCERPTS_HEADER, MULTIPLAYER_PROMPT,
+  BRANCH_CONTEXT_HEADER, ASK_PARENT_HINT, FORK_TAIL_HEADER, FORK_TAIL_MESSAGES, FORK_TAIL_MAX_CHARS,
+} from './context.js'
 
 type Row = typeof messages.$inferSelect
 
@@ -10,7 +13,7 @@ function msg(id: string, parentId: string | null, fields: Partial<Row>): Row {
   clock += 1
   return {
     id, parentId, sessionId: 'sess1', branchId: 'main', authorType: 'user', authorId: 'u1',
-    agentLabel: null, sharedFromBranchId: null, model: null, content: '', status: 'done',
+    agentLabel: null, sharedFromBranchId: null, kind: 'text', askQuestion: null, askedBranchId: null, model: null, content: '', status: 'done',
     createdAt: new Date(clock * 1000).toISOString(), ...fields,
   }
 }
@@ -26,10 +29,28 @@ describe('AI context builder', () => {
 
   it('adds the brief as a second system message, and nothing when it is empty', () => {
     const rows = [msg('m1', null, { content: 'Hi' }), msg('m2', 'm1', { authorType: 'assistant', status: 'pending' })]
-    const withBrief = buildChatContext(rows, 'm2', names, 'Use Postgres.')
+    const withBrief = buildChatContext(rows, 'm2', names, { brief: 'Use Postgres.' })
     expect(withBrief[1]).toEqual({ role: 'system', content: `${BRIEF_HEADER}\n\nUse Postgres.` })
     expect(withBrief[2]).toEqual({ role: 'user', content: 'Alice: Hi' })
-    expect(buildChatContext(rows, 'm2', names, '  \n').filter((c) => c.role === 'system')).toHaveLength(1)
+    expect(buildChatContext(rows, 'm2', names, { brief: '  \n' }).filter((c) => c.role === 'system')).toHaveLength(1)
+  })
+
+  it('puts pinned docs and the index first, then the brief, then excerpts matched to the latest message', () => {
+    const rows = [msg('m1', null, { content: 'Is any polish left?' }), msg('m2', 'm1', { authorType: 'assistant', status: 'pending' })]
+    const ctx = buildChatContext(rows, 'm2', names, {
+      brief: 'Frontend first.',
+      docs: {
+        pinned: [{ id: 'd1', title: 'ARCHITECTURE.md', content: '# Arch' }],
+        others: [{ id: 'd2', title: 'TODO.md', content: '- [ ] UI polish' }],
+      },
+    })
+    expect(ctx.slice(1, 5)).toEqual([
+      { role: 'system', content: `${PINNED_HEADER}\n\n### ARCHITECTURE.md\n\n# Arch` },
+      { role: 'system', content: `${INDEX_HEADER}\n- ARCHITECTURE.md (pinned)\n- TODO.md` },
+      { role: 'system', content: `${BRIEF_HEADER}\n\nFrontend first.` },
+      { role: 'system', content: `${EXCERPTS_HEADER}\n\n[TODO.md]\n- [ ] UI polish` },
+    ])
+    expect(ctx[5]).toEqual({ role: 'user', content: 'Alice: Is any polish left?' })
   })
 
   it('adds pinned docs in full, an index of all docs, and excerpts of unpinned docs that match the last message', () => {
@@ -40,23 +61,23 @@ describe('AI context builder', () => {
     const ui = { id: 'd1', title: 'UI spec', content: 'Buttons are blue.' }
     const auth = { id: 'd2', title: 'Auth spec', content: 'Tokens are hashed with HMAC.' }
     const billing = { id: 'd3', title: 'Billing', content: 'Invoices go out monthly.' }
-    const system = buildChatContext(rows, 'm2', names, '', { pinned: [ui], others: [auth, billing] })
+    const system = buildChatContext(rows, 'm2', names, { docs: { pinned: [ui], others: [auth, billing] } })
       .filter((c) => c.role === 'system').map((c) => c.content)
     expect(system[1]).toBe(`${PINNED_HEADER}\n\n### UI spec\n\nButtons are blue.`)
-    expect(system[2]).toBe('Project docs index:\n- UI spec (pinned)\n- Auth spec\n- Billing')
+    expect(system[2]).toBe(`${INDEX_HEADER}\n- UI spec (pinned)\n- Auth spec\n- Billing`)
     expect(system[3]).toBe(`${EXCERPTS_HEADER}\n\n[Auth spec]\nTokens are hashed with HMAC.`)
     expect(system.join()).not.toContain('Invoices')
 
     // No match: no excerpts. No docs: nothing at all.
     const off = [msg('o1', null, { content: 'Lunch?' }), msg('o2', 'o1', { authorType: 'assistant', status: 'pending' })]
-    expect(buildChatContext(off, 'o2', names, '', { pinned: [], others: [auth] }).filter((c) => c.role === 'system')).toHaveLength(2)
+    expect(buildChatContext(off, 'o2', names, { docs: { pinned: [], others: [auth] } }).filter((c) => c.role === 'system')).toHaveLength(2)
     expect(buildChatContext(off, 'o2', names).filter((c) => c.role === 'system')).toHaveLength(1)
   })
 
   it('truncates pinned docs at the context budget', () => {
     const rows = [msg('m1', null, { content: 'Hi' }), msg('m2', 'm1', { authorType: 'assistant', status: 'pending' })]
     const big = { id: 'd1', title: 'Big', content: 'x'.repeat(PINNED_DOCS_MAX_CHARS * 2) }
-    const pinned = buildChatContext(rows, 'm2', names, '', { pinned: [big], others: [] })[1].content
+    const pinned = buildChatContext(rows, 'm2', names, { docs: { pinned: [big], others: [] } })[1].content
     expect(pinned.length).toBeLessThan(PINNED_DOCS_MAX_CHARS + 200)
     expect(pinned).toContain('[Truncated: pinned docs exceed')
   })
@@ -102,5 +123,71 @@ describe('AI context builder', () => {
       msg('m4', 'm3', { authorType: 'assistant', status: 'pending' }),
     ]
     expect(turns(rows, 'm4').map((c) => c.content)).toEqual(['Alice: Hello', 'Alice: Second question'])
+  })
+})
+
+describe('scoped branch context', () => {
+  // main: m1..m8; the frontend branch forks at m8; a grandchild forks at f2.
+  function tree() {
+    const rows = [msg('m1', null, { content: 'Use Postgres' })]
+    for (let i = 2; i <= 8; i++) rows.push(msg(`m${i}`, `m${i - 1}`, { content: `main ${i}` }))
+    rows.push(
+      msg('f1', 'm8', { branchId: 'front', content: 'Start the settings page' }),
+      msg('f2', 'f1', { branchId: 'front', authorType: 'assistant', authorId: 'system', content: 'Done' }),
+      msg('g1', 'f2', { branchId: 'grand', content: 'Style it' }),
+      msg('gp', 'g1', { branchId: 'grand', authorType: 'assistant', status: 'pending' }),
+      msg('fp', 'f2', { branchId: 'front', authorType: 'assistant', status: 'pending' }),
+    )
+    return rows
+  }
+
+  it("leaves out the parent's earlier messages and keeps the fork tail verbatim", () => {
+    const ctx = buildChatContext(tree(), 'fp', names, { branchContext: '- Use Postgres [Alice in main, Oct 2]' }, 'm8')
+    const contents = ctx.map((c) => c.content)
+    expect(contents).not.toContain('Alice: Use Postgres')
+    expect(contents.slice(-(FORK_TAIL_MESSAGES + 2))).toEqual([
+      ...['main 3', 'main 4', 'main 5', 'main 6', 'main 7', 'main 8'].map((t) => `Alice: ${t}`),
+      'Alice: Start the settings page',
+      'Done',
+    ])
+  })
+
+  it('adds the branch context with its purpose, and the ask_parent hint only when the tool is offered', () => {
+    const shared = { branchContext: '- Ship dark mode first [FRONTEND.md]', purpose: 'Frontend: settings page' }
+    const ctx = buildChatContext(tree(), 'fp', names, shared, 'm8')
+    const branchMsg = ctx.find((c) => c.content.startsWith(BRANCH_CONTEXT_HEADER))!
+    expect(branchMsg.content).toContain('This branch is for: Frontend: settings page')
+    expect(branchMsg.content).toContain('- Ship dark mode first [FRONTEND.md]')
+    expect(branchMsg.content).not.toContain(ASK_PARENT_HINT)
+    expect(buildChatContext(tree(), 'fp', names, { ...shared, canAskParent: true }, 'm8')
+      .find((c) => c.content.startsWith(BRANCH_CONTEXT_HEADER))!.content).toContain(ASK_PARENT_HINT)
+    expect(ctx.findIndex((c) => c.content === FORK_TAIL_HEADER)).toBe(ctx.findIndex((c) => c.role !== 'system') - 1)
+  })
+
+  it("gives a grandchild its own fork tail from its parent branch, never main's history", () => {
+    const contents = buildChatContext(tree(), 'gp', names, {}, 'f2').map((c) => c.content)
+    expect(contents.slice(-4)).toEqual(['Alice: main 8', 'Alice: Start the settings page', 'Done', 'Alice: Style it'])
+    expect(contents).not.toContain('Alice: main 2')
+  })
+
+  it('never sees sibling-branch messages', () => {
+    const rows = [...tree(), msg('s1', 'm8', { branchId: 'sibling', content: 'Backend work' })]
+    expect(buildChatContext(rows, 'fp', names, {}, 'm8').map((c) => c.content)).not.toContain('Alice: Backend work')
+  })
+
+  it('renders an ask_parent exchange as a question and its answer', () => {
+    const rows = [
+      ...tree().filter((m) => m.id !== 'fp'),
+      msg('a1', 'f2', { branchId: 'front', kind: 'ask_parent', authorType: 'assistant', askQuestion: 'Which DB?', content: 'Postgres [Alice in main, Oct 2]' }),
+      msg('fp2', 'a1', { branchId: 'front', authorType: 'assistant', status: 'pending' }),
+    ]
+    const last = buildChatContext(rows, 'fp2', names, {}, 'm8').at(-1)!
+    expect(last).toEqual({ role: 'user', content: 'ask_parent: Which DB?\nAnswer from the parent branch: Postgres [Alice in main, Oct 2]' })
+  })
+
+  it('caps the fork tail by size but always keeps the newest message', () => {
+    const big = 'x'.repeat(FORK_TAIL_MAX_CHARS)
+    const path = [msg('b1', null, { content: big }), msg('b2', 'b1', { content: big })]
+    expect(forkTail(path).map((m) => m.id)).toEqual(['b2'])
   })
 })
