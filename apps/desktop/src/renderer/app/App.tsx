@@ -35,7 +35,13 @@ function Inner() {
   }
 
   if (activeSession) {
-    return <SessionView session={activeSession} onBack={() => setActiveSession(null)} />
+    return (
+      <SessionView
+        session={activeSession}
+        onBack={() => setActiveSession(null)}
+        onSettings={() => setShowSettings(true)}
+      />
+    )
   }
 
   return (

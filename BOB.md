@@ -32,60 +32,60 @@ Free models cost nothing, so these no longer protect anything.
 ## Checklist
 
 ### Before you start
-- [ ] Commit Sam's uncommitted free-models change, or build directly on top of it.
-- [ ] Run `npm run typecheck` and `npm test`. Both should pass (39 tests) before you change anything.
+- [x] Commit Sam's uncommitted free-models change, or build directly on top of it.
+- [x] Run `npm run typecheck` and `npm test`. Both should pass (39 tests) before you change anything.
 - [ ] Confirm `meta-llama/llama-3.3-70b-instruct:free` is still listed by `curl https://openrouter.ai/api/v1/models`.
   - If it's gone, pick another `:free` id.
   - Use that id everywhere below, including `DEV_FREE_MODELS` in `ai/models.ts`.
 
 ### 1. Migrate stored paid models (most important)
-- [ ] From `apps/server`, run `npx drizzle-kit generate --custom --name free_models`. This creates migration `0004` and updates `drizzle/meta/_journal.json`.
-- [ ] Put this SQL in the new migration:
+- [x] From `apps/server`, run `npx drizzle-kit generate --custom --name free_models`. This creates migration `0004` and updates `drizzle/meta/_journal.json`.
+- [x] Put this SQL in the new migration:
   ```sql
   UPDATE branches SET model = 'meta-llama/llama-3.3-70b-instruct:free' WHERE model NOT LIKE '%:free';
   --> statement-breakpoint
   UPDATE sessions SET default_model = 'meta-llama/llama-3.3-70b-instruct:free' WHERE default_model NOT LIKE '%:free';
   ```
-- [ ] Leave `messages.model` alone. It records which model wrote each past reply.
+- [x] Leave `messages.model` alone. It records which model wrote each past reply.
 
 ### 2. Validate the free model in one place
-- [ ] In `packages/shared/src/index.ts`:
+- [x] In `packages/shared/src/index.ts`:
   - Move `isFreeModelId` in from `apps/server/src/ai/models.ts`.
   - Add:
     ```ts
     export const FreeModelIdSchema = z.string().min(1).refine(isFreeModelId, 'Select an OpenRouter model with the :free suffix.')
     ```
-- [ ] Use `FreeModelIdSchema` for:
+- [x] Use `FreeModelIdSchema` for:
   - `CreateSessionSchema.defaultModel`
   - `CreateBranchSchema.model`
   - `UpdateBranchSchema.model` (keep `.optional()`)
-- [ ] Run `npm run build -w packages/shared`. `packages/shared/dist` is tracked, so commit it.
-- [ ] Delete the duplicate checks:
+- [x] Run `npm run build -w packages/shared`. `packages/shared/dist` is tracked, so commit it.
+- [x] Delete the duplicate checks:
   - Both `isFreeModelId` blocks in `apps/server/src/routes/sessions.ts`.
   - The PATCH block in `apps/server/src/routes/branches.ts`.
-- [ ] In `apps/server/src/mcp/handler.ts` `create_branch`:
+- [x] In `apps/server/src/mcp/handler.ts` `create_branch`:
   - Change `model: z.string()` to `FreeModelIdSchema`.
   - Delete the manual check.
-- [ ] Delete `isFreeModelId` from `apps/server/src/ai/models.ts` and import it from `@tandem/shared`.
-- [ ] **Keep** the guards in `apps/server/src/ai/openrouter.ts`, importing from `@tandem/shared`. They are the backstop for stored rows.
+- [x] Delete `isFreeModelId` from `apps/server/src/ai/models.ts` and import it from `@tandem/shared`.
+- [x] **Keep** the guards in `apps/server/src/ai/openrouter.ts`, importing from `@tandem/shared`. They are the backstop for stored rows.
 
 ### 3. Fix the e2e script
-- [ ] In `apps/server/scripts/e2e.mjs`, change lines 29 and 68 from `anthropic/claude-sonnet-4` to the default free model.
+- [x] In `apps/server/scripts/e2e.mjs`, change lines 29 and 68 from `anthropic/claude-sonnet-4` to the default free model.
 
 ### 4. Docs (same commit as the code)
-- [ ] README endpoint table:
+- [x] README endpoint table:
   - `/api/models` → "OpenRouter free models (`:free` ids only), cached for 1 h".
   - Session create and branch create/PATCH → note 400 when the model isn't a `:free` id.
-- [ ] ARCHITECTURE.md:
+- [x] ARCHITECTURE.md:
   - "Models" contract row → the branch model must be an OpenRouter `:free` id (`FreeModelIdSchema` in `packages/shared`).
   - MCP tools table, `list_models` row → "free model IDs and names".
 
 ### 5. Tests
-- [ ] Move `apps/server/src/ai/models.test.ts` to `packages/shared/src/index.test.ts`, importing `isFreeModelId` from `./index.js`.
-- [ ] In `apps/server/src/routes/integration.test.ts`, in the "rejects paid model IDs" test, expect `invalid_request` instead of `free_model_required`.
+- [x] Move `apps/server/src/ai/models.test.ts` to `packages/shared/src/index.test.ts`, importing `isFreeModelId` from `./index.js`.
+- [x] In `apps/server/src/routes/integration.test.ts`, in the "rejects paid model IDs" test, expect `invalid_request` instead of `free_model_required`.
 
 ### 6. Verify (run each one and watch it pass)
-- [ ] Run `npm run typecheck` and `npm test`. Both pass.
+- [x] Run `npm run typecheck` and `npm test`. Both pass.
 - [ ] Check the migration:
   - Use a copy of a SQLite database created before this change, with a session on `openai/gpt-4o-mini`.
   - Start the server on it.

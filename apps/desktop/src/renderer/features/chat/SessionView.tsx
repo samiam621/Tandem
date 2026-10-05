@@ -9,9 +9,10 @@ import { MentionMenu, buildMentionItems, highlightMentions } from './MentionMenu
 interface Props {
   session: Session
   onBack: () => void
+  onSettings: () => void
 }
 
-export function SessionView({ session, onBack }: Props) {
+export function SessionView({ session, onBack, onSettings }: Props) {
   const { user } = useAuth()
   const [serverUrl, setServerUrl] = useState('http://localhost:3000')
   const [token, setToken] = useState<string | null>(null)
@@ -466,10 +467,10 @@ export function SessionView({ session, onBack }: Props) {
             <div className="px-3 py-2 border-t border-gray-800 shrink-0">
               <p className="text-[10px] text-gray-600 leading-snug">
                 No agents connected.{' '}
+                {/* Clicking this opens Settings directly so the user can create an agent token */}
                 <button
-                  onClick={onBack}
+                  onClick={onSettings}
                   className="text-gray-500 underline hover:text-gray-300"
-                  title="Go back to Home then open Settings"
                 >
                   Connect one in Settings →
                 </button>
