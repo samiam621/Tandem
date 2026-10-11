@@ -8,7 +8,7 @@
 
 Not sure which Mac you have? Apple menu → **About This Mac**: "Apple M1/M2/M3/M4…" means Apple Silicon, "Intel" means Intel. All files: [Releases](https://github.com/samiam621/Tandem/releases).
 
-The app connects to our hosted server automatically. There is nothing to configure.
+The app connects to our hosted server automatically. There is nothing to configure. The server sleeps when idle, so the first sign-in can take up to a minute while it wakes up.
 
 > [!WARNING]
 > **The hosted server runs on Render's free plan — all data is temporary.**
@@ -163,7 +163,7 @@ Deploy `apps/server` to Render, Railway, or Fly.io. The host needs to support We
 
 **Run exactly one instance.** Presence and the AI reply queues are kept in memory.
 
-**Current deployment (hackathon):** Render web service `tandem-server` at `https://tandem-server-hdmw.onrender.com`, deployed from `samTest` with auto-deploy off (deploy manually from the Render dashboard).
+**Current deployment (hackathon):** Render web service `tandem-server` at `https://tandem-server-hdmw.onrender.com`, deployed from `main` (deploy manually from the Render dashboard, or turn on auto-deploy).
 
 | Setting | Value |
 |---|---|
@@ -284,6 +284,30 @@ packages/shared  Shared types and Zod schemas
 ```
 
 For more detail, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
+---
+
+## Team
+
+| | Samantha An ([@samiam621](https://github.com/samiam621)) | Michael Ramirez ([@michaelnkr808](https://github.com/michaelnkr808)) |
+|---|---|---|
+| **Role** | Repo owner, agent integration, deployment and releases, reviews | Initial MVP, desktop UI and frontend, AI context features |
+| **Commits** | 41 (+13 PR merges) | 10 (+2 PR merges) |
+
+**Samantha**
+- Claude-in-chat over MCP: contract types, agent tokens, `@mentions`, MCP tools, Share to main, outsider/self-mention tests and the end-to-end script (B1–B7)
+- Server hardening: run migrations before recovering stale messages, refuse to start without `TOKEN_SECRET`, in-order WebSocket frames, members-only live events
+- Render deployment, downloadable macOS/Windows installers, release workflow, Electron 44 upgrade
+- Project docs: upload text/PDF to a session, pin to branches, desktop docs panel
+- Free-model migration (OpenRouter `:free` models, retiring the dead Llama model), invite link format, first-launch sign-in
+- Planning and review rounds (CP3, R2), README, ARCHITECTURE.md, and agent safety rules
+
+**Michael**
+- First working MVP of the app (server, desktop, shared package)
+- Session project brief that every branch reads live; per-branch specs
+- Speaker names in AI context, OpenRouter fixes, presence refetch for unknown users, auto-refresh retry fix
+- Desktop UI redesign and FRONTEND.md
+- Session OpenRouter keys (BYOK) and scoped branch context
 
 ---
 
