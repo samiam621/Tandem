@@ -32,6 +32,9 @@ jobs:
       # Desktop + shared only: the server's native better-sqlite3 is not needed and fails to compile on Windows runners.
       - run: npm ci --workspace apps/desktop --workspace packages/shared
       - run: npm run build -w packages/shared
+      # Stamp the tag's version (v0.1.3 -> 0.1.3) into the app so About/version matches the release.
+      - run: npm pkg set version=${GITHUB_REF_NAME#v} -w apps/desktop
+        shell: bash
       - name: Build installer
         working-directory: apps/desktop
         run: npx electron-vite build && npx electron-builder ${{ matrix.target }} --publish never
